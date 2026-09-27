@@ -5,9 +5,8 @@ struct ContentView: View {
     @State private var voiceIndex = 0
     @State private var speed: Double = 0.5            // slider fraction, same scale VoiceOver uses
     @State private var text: String = ""
-    @State private var isBusy = false
     @State private var status = ""
-    @State private var player: AVAudioPlayer?         // retained so playback isn't cut off
+    @StateObject private var previewPlayer = PreviewPlayer()   // the Play / Stop button's audio (PreviewPlayer.swift)
     @State private var singing = SingingMode.load()   // shared with the extension (app group), saved on every change
 
     private var voice: ClassicVoiceDef { CLASSIC_VOICES[min(voiceIndex, CLASSIC_VOICES.count - 1)] }
@@ -59,7 +58,10 @@ struct ContentView: View {
                             }
                         }
                     }
-                    .onChange(of: voiceIndex) { _, _ in prefill() }
+                    .onChange(of: voiceIndex) { _, _ in
+                        previewPlayer.stop()
+                        prefill()
+                    }
                 }
 
                 Section("Speed") {
@@ -78,7 +80,7 @@ struct ContentView: View {
                         .accessibilityHidden(true)
                 }
 
-                // Always visible, whatever voice is picked (Quinton, 2026-09-25): applies to VoiceOver and Preview.
+                // Always visible, whatever voice is picked (Quinton, 2026-09-25): applies to VoiceOver and the Play button.
                 Section {
                     Toggle("Enable singing mode for SAPI 5 voices", isOn: $singing.enabled)
                         .accessibilityHint("Sam, Mike and Mary sing song scores they come across")
@@ -118,7 +120,7 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("When on, Sam, Mike and Mary sing any song score they come across, such as twin-kle C4 1 C4 1, and speak everything else normally.")
                         if !SingingMode.isShared {
-                            Text("This copy of the app has no shared app group, so VoiceOver cannot see the singing switch; Preview still sings.")
+                            Text("This copy of the app has no shared app group, so VoiceOver cannot see the singing switch; the Play button still sings.")
                         }
                     }
                 }
@@ -128,14 +130,19 @@ struct ContentView: View {
                     TextEditor(text: $text)
                         .frame(minHeight: 90)
                         .accessibilityLabel("Text to speak")
+                        .onChange(of: text) { _, _ in previewPlayer.stop() }
                 }
 
                 Section {
-                    Button(action: preview) {
-                        Label("Preview", systemImage: "play.circle.fill")
+                    // One button that plays and stops (Quinton, 2026-09-27). The same view in every state, only its
+                    // label changes, so VoiceOver focus stays on it. Never disabled while it can stop something.
+                    Button(action: playStopTapped) {
+                        Label(previewPlayer.isActive ? "Stop" : "Play",
+                              systemImage: previewPlayer.isActive ? "stop.circle.fill" : "play.circle.fill")
                     }
-                    .disabled(isBusy || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .accessibilityHint("Speaks the text with the selected voice and speed")
+                    .disabled(!previewPlayer.isActive && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityLabel(previewPlayer.isActive ? "Stop" : "Play")
+                    .accessibilityHint(previewHint)
 
                     if !status.isEmpty {
                         Text(status).font(.footnote).foregroundStyle(.secondary)
@@ -169,61 +176,48 @@ struct ContentView: View {
 #endif
     }
 
+    private var previewHint: String {
+        previewPlayer.isActive ? "Stops the preview" : "Speaks the text with the selected voice and speed"
+    }
+
+    /// Play from the beginning when idle; otherwise stop.
+    private func playStopTapped() {
+        if previewPlayer.isActive {
+            previewPlayer.stop()
+            // Only a stop is announced: on play the preview itself is the answer, and speech over it would clash.
+            AccessibilityNotification.Announcement("Play").post()
+        } else {
+            preview()
+        }
+    }
+
     private func preview() {
-        isBusy = true
         status = ""
+        let g = previewPlayer.beginLoading()
         let t = text, v = voice, rate = SpeechRate.sapiRate(fromFraction: speed), sing = singing
         DispatchQueue.global(qos: .userInitiated).async {
             var mismatches: Int32 = 0
             let samples = ClassicEngine.shared.synthesize(text: t, voice: v, sapiRate: rate, singing: sing,
                                                           mismatches: &mismatches)
             DispatchQueue.main.async {
-                isBusy = false
+                guard g == previewPlayer.generation else { return }   // stopped, or the text or voice changed, meanwhile
                 if mismatches > 0 {   // a pasted score: some word's notes do not match its syllables
                     status = "\(mismatches) word\(mismatches == 1 ? "" : "s") in the score had a different number of notes than syllables."
                 }
                 guard let samples else {
                     status = "Synthesis failed."
+                    previewPlayer.loadFailed(generation: g)
                     return
                 }
                 guard !samples.isEmpty else {
                     status = "Nothing to speak in that text."
+                    previewPlayer.loadFailed(generation: g)
                     return
                 }
-                play(samples, sampleRate: Int(ClassicEngine.sampleRate))
+                if let error = previewPlayer.deliver(samples, sampleRate: Int(ClassicEngine.sampleRate), generation: g) {
+                    status = error
+                }
             }
         }
-    }
-
-    private func play(_ samples: [Int16], sampleRate: Int) {
-        do {
-#if os(iOS)
-            // macOS has no AVAudioSession: AVAudioPlayer plays straight to the default output.
-            try AVAudioSession.sharedInstance().setCategory(.playback, options: [.duckOthers])
-            try AVAudioSession.sharedInstance().setActive(true)
-#endif
-            player?.stop()
-            let p = try AVAudioPlayer(data: Self.wavData(samples, sampleRate: sampleRate))
-            p.prepareToPlay()
-            p.play()
-            player = p
-        } catch {
-            status = "Playback error: \(error.localizedDescription)"
-        }
-    }
-
-    /// Wrap raw Int16 mono PCM in a minimal WAV container for AVAudioPlayer.
-    static func wavData(_ samples: [Int16], sampleRate: Int) -> Data {
-        func u32(_ v: UInt32) -> Data { withUnsafeBytes(of: v.littleEndian) { Data($0) } }
-        func u16(_ v: UInt16) -> Data { withUnsafeBytes(of: v.littleEndian) { Data($0) } }
-        let dataLen = samples.count * 2
-        var d = Data()
-        d.append(Data("RIFF".utf8)); d.append(u32(UInt32(36 + dataLen))); d.append(Data("WAVE".utf8))
-        d.append(Data("fmt ".utf8)); d.append(u32(16)); d.append(u16(1)); d.append(u16(1))
-        d.append(u32(UInt32(sampleRate))); d.append(u32(UInt32(sampleRate * 2)))
-        d.append(u16(2)); d.append(u16(16))
-        d.append(Data("data".utf8)); d.append(u32(UInt32(dataLen)))
-        samples.withUnsafeBytes { d.append(contentsOf: $0) }
-        return d
     }
 }

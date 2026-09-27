@@ -108,6 +108,17 @@ ssml-test: build/mac/ssml_test
 
 .PHONY: ssml-test
 
+# The app's Play / Stop button (App/PreviewPlayer.swift): play, stop at once, stop while synthesizing, stale audio
+# ignored, reset to Play when the clip ends. Plays silence at volume 0.
+build/mac/preview_test: App/PreviewPlayer.swift Tests/preview/main.swift
+	mkdir -p build/mac
+	swiftc -O App/PreviewPlayer.swift Tests/preview/main.swift -o $@
+
+preview-test: build/mac/preview_test
+	./build/mac/preview_test
+
+.PHONY: preview-test
+
 # Microsoft Anna (Engine/anna, the ms-ana-decomp reconstruction of the Vista / 7 TTS20 engine) and its bridge, exactly
 # as the iOS targets compile them. The engine must be built WITHOUT floating-point contraction (-ffp-contract=off): its
 # author verified it bit-exact with the original only that way, and its decoder refuses to open otherwise.

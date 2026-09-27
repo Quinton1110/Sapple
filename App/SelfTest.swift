@@ -410,7 +410,7 @@ enum SelfTest {
         let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("selftest-\(c.name).wav")
         let int16 = samples.map { Int16(max(-1, min(1, $0)) * 32767) }
-        try? ContentView.wavData(int16, sampleRate: Int(sampleRate)).write(to: url)
+        try? PreviewPlayer.wavData(int16, sampleRate: Int(sampleRate)).write(to: url)
         print(String(format: "CVSELFTEST case=%@ %@ samples=%d rate=%.0f audio=%.2fs peak=%.3f wall=%.2fs rtf=%.1fx%@",
                      c.name, note, samples.count, sampleRate, secs, peak, wall, wall > 0 ? secs / wall : 0,
                      stopAt >= 0 ? " (stop requested at sample \(stopAt))" : ""))
