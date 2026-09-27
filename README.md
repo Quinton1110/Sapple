@@ -73,7 +73,7 @@ To check the code compiles without any voice data, run `tools/stub_data.sh` firs
 
 The Makefile also builds each engine for the Mac with sanitizers and renders samples, for example `make test`, `make anna-test`, `make onecore-test`, `make truvoice-test`, `make sapi4-test` and `make neural-test`.
 
-Inside the code the project is still called ClassicVoices, and the bundle identifiers are unchanged.
+The build produces Sapple.app on iOS and macOS. Inside the code the project, its targets and the extension (ClassicVoicesExtension.appex) are still called ClassicVoices, and the bundle identifiers are unchanged.
 
 ## Project layout
 

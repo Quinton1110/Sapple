@@ -88,7 +88,9 @@ targetTemplates:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.quinton.classicvoices
-        PRODUCT_NAME: ClassicVoices
+        # The built app is Sapple.app (and its executable and Swift module are Sapple). The bundle identifiers, the app
+        # group and the voice identifiers are unchanged, so an install replaces the existing app and keeps its voices.
+        PRODUCT_NAME: Sapple
         GENERATE_INFOPLIST_FILE: NO
 
   Extension:
@@ -141,6 +143,8 @@ targetTemplates:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.quinton.classicvoices.Extension
+        # Stays ClassicVoicesExtension: the app finds the voice data inside PlugIns/ClassicVoicesExtension.appex
+        # (ClassicEngine.annaDataDir and its siblings). Its display name is Sapple (Info.plist).
         PRODUCT_NAME: ClassicVoicesExtension
         GENERATE_INFOPLIST_FILE: NO
 
