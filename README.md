@@ -30,7 +30,7 @@ Sideloadly (quick one time install):
 
 With a free Apple ID the app stops working after 7 days and has to be reinstalled. A paid Apple Developer account keeps it running for a year.
 
-On the Mac, put Sapple in Applications and open it once so macOS picks up the voices. Leave it there, since macOS finds the voices through the app.
+On the Mac, put Sapple in Applications and open it once so macOS picks up the voices. Leave it there, since macOS finds the voices through the app. The Mac app needs an Apple Silicon Mac; it does not run on an Intel Mac.
 
 ## Picking the voices
 

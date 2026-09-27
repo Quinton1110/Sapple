@@ -191,6 +191,8 @@ targets:
   # -- macOS --
   # The appex is embedded in Contents/PlugIns of the app and signed with it; macOS finds the voices
   # through the app bundle, so the app has to stay where it is put (Applications, say).
+  # Apple Silicon only, 2026-09-27: both Mac targets set ARCHS to arm64, no x86_64 slice and no
+  # universal build.
   # Both Mac targets sign MANUALLY with "Developer ID Application: Quinton Williams (ZGJQ5DZFK2)"
   # so the app can be notarised and run on other people's Macs. Developer ID needs no provisioning
   # profile for these entitlements (app sandbox only); --timestamp is the secure timestamp the
@@ -204,6 +206,7 @@ targets:
     platform: macOS
     settings:
       base:
+        ARCHS: arm64
         INFOPLIST_FILE: App/Info-macOS.plist
         CODE_SIGN_ENTITLEMENTS: App/App-macOS.entitlements
         ENABLE_HARDENED_RUNTIME: YES
@@ -227,6 +230,7 @@ targets:
     platform: macOS
     settings:
       base:
+        ARCHS: arm64
         INFOPLIST_FILE: Extension/Info-macOS.plist
         CODE_SIGN_ENTITLEMENTS: Extension/Ext-macOS.entitlements
         ENABLE_HARDENED_RUNTIME: YES
