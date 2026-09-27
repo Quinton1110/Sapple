@@ -1,0 +1,402 @@
+# Engine object layout (the C++ object the SAPI engine thread keeps on its
+# stack; CGRM_EN sub_1002e240 frame at ebp-0x91bc).  Offsets are exact for
+# the original 32-bit layout.  Generated into build/gen/engine_struct.h by
+# tools/gen_struct.py.  Names are provisional until each field's use is
+# fully understood.
+
+# One queued input segment of a TextData item, split at line breaks
+# (CGRM_EN sub_10055aa0).
+struct InputSeg 0x10
+0x00 char     *text
+0x08 int16_t   len
+0x0a uint8_t   caps_only        # no lower-case or high-bit characters
+0x0b uint8_t   no_words         # nothing speakable (only punctuation/space)
+0x0c uint8_t   flag_c
+end
+
+# One entry of the stage 0 rule call stack.
+struct S0Frame 0x8
+0x00 const uint8_t *ip
+0x04 uint8_t   nactions
+0x05 uint8_t   skip
+end
+
+# A node of the engine's work list.  Every pipeline stage transforms and
+# re-labels nodes in place; the low three flag bits are the node type
+# (0 = control command, 1..5 = stage-specific kinds, 6 = free, 7 = sentinel).
+struct Node 0x20
+0x00 Node     *next
+0x04 Node     *prev
+0x08 uint32_t  flags            # bits 0-2 type, bits 3-7 per-stage flags
+0x0c uint32_t  arg              # control nodes: command argument
+0x10 uint32_t  d10
+0x14 uint8_t   b14
+0x15 uint8_t   b15
+0x16 uint8_t   value            # character / command letter
+0x17 uint8_t   syllable         # 1-based syllable number within the word
+0x18 uint8_t   b18
+0x19 uint8_t   b19
+0x1a uint8_t   b1a              # the output mode in force when stage 2 passed
+0x1c uint32_t  notify           # 'i' (index mark) commands: TextData notify context
+end
+
+# Per-stage cursor into the work list plus the voice parameters in effect at
+# that stage's position (control nodes update them as the stage passes).
+# Five of these follow at Engine+0x2144, one per pipeline stage.
+struct StageCtx 0x44
+0x00 Node     *first            # start of this stage's window
+0x04 Node     *cur              # nodes before cur are done by this stage
+0x08 Node     *ctl              # next control node to execute
+0x0c Node     *scan
+0x10 Node     *last             # end of this stage's window
+0x14 Node     *d14              # start of the text the stage is matching
+0x18 Node     *d18              # scratch cursor
+0x1c int32_t   p_1c
+0x20 int32_t   p_20
+0x24 int32_t   rate_index       # (wpm - 46) >> 3
+0x28 int32_t   pitch
+0x2c int32_t   volume_atten     # 0..15
+0x30 int32_t   p_30
+0x34 int32_t   p_34
+0x38 int32_t   p_38
+0x3c uint32_t  type_mask        # node types this stage processes (bit per type)
+0x40 int32_t   voice
+end
+
+# The per-parameter transition state stage 3 keeps while it writes a phoneme.
+struct S3Param 0x1c
+0x00 int32_t  mode             # how the parameter travels (see Stage3_Write)
+0x04 int32_t  shape_in         # the curve it blends back along
+0x08 int32_t  shape_out        # the curve it decays along, or a ramp length
+0x0c int32_t  len              # frames this parameter advances this step
+0x10 int32_t  lead             # the value blended into the frames before
+0x14 int32_t  start            # where the phoneme's own run starts
+0x18 int32_t  target           # and where it settles
+end
+
+struct Engine 0x9184
+0x0000 uint8_t  synth_busy
+0x0004 int32_t  trk_04
+0x0008 int32_t  trk_08
+0x000c int32_t  trk_0c
+0x0010 int32_t  trk_10
+0x0014 uint8_t  trk_14[32]
+0x0034 int32_t  trk_34
+0x0038 int32_t  trk_38
+0x003c int32_t  trk_wr[22]       # per-parameter track write position
+0x0094 int32_t  trk_rd[22]       # per-parameter track read position
+0x00ec uint8_t *trk_buf[22]      # -> trk_data[i]
+0x0144 S3Param  s3_param[22]     # per-parameter transition state
+0x03ac uint8_t  trk_data[22][256] # 22 synthesis-parameter tracks
+0x19ac uint8_t  synth_hold       # ESC[H / ESC[C
+0x19ad uint8_t  synth_19ad
+0x19ae uint8_t  synth_19ae
+0x19b0 int16_t  filt_coef[40]    # Q15 coefficients, sample-rate dependent
+0x1a00 int32_t  mode_I           # ESC[..I (0/1)
+0x1a04 int32_t  mode_P           # ESC[..P (0/1)
+0x1a08 int32_t  rate_index       # (speed_wpm - 46) >> 3
+0x1a0c int32_t  speed_wpm
+0x1a10 int32_t  pitch
+0x1a14 int32_t  volume_atten     # 0..15, from log10 of the SAPI volume
+0x1a18 int32_t  rate_class       # ESC[..f (0..9): caps rate_index
+0x1a1c int32_t  flags_N          # ESC[..N / ESC[..F bits
+0x1a20 int32_t  flags_A          # ESC[..A / ESC[..D bits
+0x1a24 int32_t  voice            # 0..9
+0x1a28 uint8_t  cfg_bytes[22]    # ESC[k;v l: raw synthesis parameter defaults
+0x1a40 InputSeg in_seg[10]
+0x1ae0 uint32_t feed_pos         # position within the current TextData item
+0x1ae4 int32_t  e_1ae4
+0x1ae8 int32_t  in_flags_N       # flags_N as seen by the input stage
+0x1aec int32_t  in_flags_A       # flags_A as seen by the input stage
+0x1af0 int32_t  esc_state        # preformatter: 1 text, 2 after ESC, 3 in ESC[
+0x1af4 uint8_t  pre_busy
+0x1af5 uint8_t  esc_nparam
+0x1af6 uint8_t  esc_overflow
+0x1af8 int32_t  esc_param[16]
+0x1b38 const uint8_t *s0_ip      # stage 0 rule program counter (into g_10120a10)
+0x1b3c uint8_t  s0_need_test     # next step evaluates a condition
+0x1b3d uint8_t  s0_1b3d
+0x1b40 const uint8_t *s0_word_data  # replacement text after a matched word
+0x1b44 uint8_t  s0_nactions      # actions left in the current rule
+0x1b45 uint8_t  s0_skip          # bytes to skip after them
+0x1b48 S0Frame  s0_stack[20]
+0x1be8 S0Frame *s0_sp
+0x1bec uint8_t  s0_vars[12]      # rule variables
+0x1bf8 Node     s0_pending       # accent/stress carried to the next emitted node
+0x1c18 Node    *s0_pending_ptr
+0x1c1c uint8_t  s0_1c1c
+0x1c20 int32_t  s1_1c20
+0x1c24 uint32_t  s1_rule         # the suffix rule that matched, a tv_ref
+0x1c28 uint8_t  s1_1c28
+0x1c29 uint8_t  s1_1c29
+0x1c2a uint8_t  s1_1c2a           # word was preceded by '~'
+0x1c2b uint8_t  s1_1c2b           # word was preceded by '`'
+0x1c2c uint8_t  s1_1c2c
+0x1c2d uint8_t  s1_1c2d
+0x1c30 Node    *s1_word_start    # first node of the word being pronounced
+0x1c34 Node    *s1_word_end
+0x1c38 int32_t  s1_1c38
+0x1c3c Node    *s1_next_start
+0x1c40 Node    *s1_letters        # first letter node of the word
+0x1c44 Node    *s1_next_end
+0x1c48 Node    *s1_cursor        # Stage1_Advance walk position
+0x1c4c int32_t  s1_steps
+0x1c50 uint8_t  s1_1c50
+0x1c54 Node    *lts_pending       # vowel still waiting for its stress
+0x1c58 Node    *lts_back          # letter-to-sound: left-context cursor
+0x1c5c Node    *lts_cur           # the letter the rules are being applied to
+0x1c60 uint32_t lts_feat_lo       # feature bits of the letter being matched
+0x1c64 uint32_t lts_feat_hi
+0x1c68 int32_t  lts_reduce
+0x1c6c int32_t  lts_syllables
+0x1c70 uint8_t  lts_second_pass
+0x1c74 int32_t  s2_nmarks         # how many marks are in use
+0x1c78 Node    *s2_marks[51]     # nodes stage 2 remembers as it scans
+0x1d44 uint8_t  s2_1d44
+0x1d45 uint8_t  s2_1d45
+0x1d48 int32_t  s2_1d48
+0x1d4c int32_t  s2_1d4c
+0x1d50 int32_t  s2_1d50
+0x1d54 uint8_t  s2_1d54
+0x1d55 uint8_t  s2_1d55
+0x1d58 int32_t  s2_1d58           # frames left before the next break
+0x1d5c int32_t  s2_1d5c
+0x1d60 int32_t  s2_1d60
+0x1d64 int32_t  s2_1d64
+0x1d68 int32_t  s2_1d68
+0x1d6c int32_t  s2_1d6c
+0x1d70 uint8_t  s2_1d70
+0x1d74 int32_t  s2_1d74
+0x1d78 int32_t  s2_1d78
+0x1d7c int32_t  s2_1d7c
+0x1d80 int32_t  s2_1d80
+0x1d84 int32_t  s2_1d84
+0x1d88 int32_t  s2_1d88
+0x1d8c int32_t  s2_1d8c
+0x1d90 uint8_t  s2_1d90
+0x1d94 int32_t  s2_1d94
+0x1d98 uint8_t  s2_1d98
+0x1d99 uint8_t  s2_1d99
+0x1d9a uint8_t  s2_1d9a
+0x1d9b uint8_t  s2_1d9b
+0x1d9c Node    *s2_stressed      # last strongly stressed vowel in the clause
+0x1da0 int32_t  s2_1da0
+0x1da4 uint8_t  s2_1da4
+0x1da5 uint8_t  s2_1da5           # cached attributes of the current phoneme
+0x1da6 uint8_t  s2_1da6
+0x1da7 uint8_t  s2_1da7
+0x1da8 uint8_t  s2_1da8
+0x1da9 uint8_t  s2_1da9
+0x1daa uint8_t  s2_1daa
+0x1dab uint8_t  s2_1dab
+0x1dac uint8_t  s2_1dac
+0x1dad uint8_t  s2_1dad
+0x1dae uint8_t  s2_1dae
+0x1daf uint8_t  s2_1daf
+0x1db0 uint8_t  s2_1db0
+0x1db1 uint8_t  s2_1db1           # the phoneme last emitted
+0x1db4 Node    *s2_next_word     # the neighbours it also caches
+0x1db8 Node    *s2_next1
+0x1dbc Node    *s2_next2
+0x1dc0 Node    *s2_prev_word
+0x1dc4 Node    *s2_prev1
+0x1dc8 Node    *s2_prev2
+0x1dcc uint8_t  s2_c_next1
+0x1dcd uint8_t  s2_c_next2
+0x1dce uint8_t  s2_c_next_word
+0x1dd0 uint8_t  s2_c_prev_word
+0x1dd2 uint8_t  s2_c_prev1
+0x1dd3 uint8_t  s2_c_prev2
+0x1dd4 uint8_t  s2_1dd4
+0x1dd8 int32_t  s2_1dd8           # nominal duration of this phoneme
+0x1ddc int32_t  s2_1ddc           # its minimum duration
+0x1de0 int32_t  s2_dur[8]        # accumulated duration percentages
+0x1e1c int32_t  s2_1e1c
+0x1e20 uint8_t  s2_1e20
+0x1e24 int32_t  s3_1e24
+0x1e28 int32_t  s3_1e28
+0x1e2c int32_t  s3_1e2c
+0x1e30 int32_t  s3_1e30
+0x1e34 int32_t  s3_1e34
+0x1e38 int32_t  s3_1e38
+0x1e3c int32_t  s3_1e3c
+0x1e40 int32_t  s3_1e40
+0x1e44 int32_t  s3_1e44
+0x1e48 int32_t  s3_1e48
+0x1e4c int32_t  s3_1e4c
+0x1e50 int32_t  s3_1e50
+0x1e54 int32_t  s3_1e54
+0x1e58 int32_t  s3_1e58
+0x1e5c int32_t  s3_1e5c[3]
+0x1e68 uint8_t  s3_flag[11]       # what kind of phoneme this is, for the rules
+0x1e74 int32_t  s3_param_def[22] # default of each synthesis parameter, scaled
+0x1ecc int32_t  s3_param_rate[22] # how fast each parameter may move
+0x1f24 int32_t  s3_alt[7]        # a second set of formant targets
+0x1f40 int32_t  s3_next[22]      # the targets of the phoneme after
+0x1f98 uint8_t  s3_param_raw[22]
+0x1fae uint8_t  s3_1fae
+0x1fb0 int32_t  s3_1fb0
+0x1fb4 int32_t  s3_1fb4
+0x1fb8 int32_t  s3_1fb8
+0x1fbc uint8_t  s3_1fbc
+0x1fbd uint8_t  s3_1fbd[32]
+0x1fdd uint8_t  s3_1fdd
+0x1ff0 int32_t  s3_hold_left     # frames of the held sound still to write
+0x1ff4 uint8_t  s3_hold_ch       # which kind of hold: 'g', 's' or 't'
+0x1ff5 uint8_t  s3_hold_start    # the next write starts a new hold
+0x1ff6 uint8_t  s3_hold[22]      # the parameter frame it repeats
+0x200c int32_t  s3_hold_pitch    # its pitch, 0 when it is silent
+0x2010 int32_t  s3_2010
+0x2014 int32_t  s3_runlen         # frames of this phoneme left to fill
+0x2018 int32_t  s3_nasal_tgt[7]  # where the nasal murmur's formants sit
+0x1fe0 int32_t  s3_1fe0
+0x1fe4 int32_t  s3_1fe4
+0x1fe8 int32_t  s3_1fe8
+0x1fec uint8_t  s3_1fec
+0x1fed uint8_t  s3_1fed
+0x2034 uint8_t  s3_2034
+0x2035 uint8_t  s3_2035
+0x2038 int32_t  syn_2038
+0x203c int32_t  syn_203c
+0x2040 int32_t  syn_2040
+0x2044 const void *syn_tab[10]   # sample-rate dependent tables
+0x206c int32_t  e_206c
+0x2070 int32_t  e_2070
+0x2074 uint8_t  e_2074
+0x2075 uint8_t  mute             # volume below 0x50
+0x2076 int16_t  o_2076
+0x2078 int16_t  o_2078
+0x207a int16_t  o_207a
+0x207c int16_t  o_207c
+0x207e int16_t  o_207e
+0x2080 int16_t  o_2080
+0x2082 int16_t  o_2082
+0x2086 int16_t  o_2086
+0x2088 uint16_t o_2088
+0x208a int16_t  o_208a
+0x208c int16_t  o_208c
+0x208e int16_t  o_208e
+0x2090 int16_t  o_rate_div100    # sample_rate / 100
+0x2092 int16_t  o_2092[11]       # 0x2092..0x20a6
+0x20a8 int16_t  o_20a8
+0x20aa int16_t  o_20aa
+0x20ac int16_t  o_20ac
+0x20ae int16_t  o_20ae[22]       # 0x20ae..0x20d8
+0x20dc int32_t  o_20dc
+0x20e0 int32_t  o_20e0
+0x20e4 int32_t  o_20e4
+0x20e8 int32_t  o_20e8
+0x20ec uint8_t  preformat        # SAPI "PreFormat" option
+0x20ed uint8_t  item_done        # current TextData item fully fed
+0x20ee uint8_t  textin_on        # SAPI "TextIn" option
+0x20f0 TextIn  *textin
+0x20f4 SapiCentral *sapi        # owning SAPI central object (NULL when standalone)
+0x20f8 uint32_t cur_pitch        # last values applied from the SAPI object
+0x20fc uint32_t cur_speed
+0x2100 uint32_t cur_volume
+0x2104 uint16_t fmt_2104
+0x2108 uint32_t cur_bac
+0x210c uint16_t sample_rate
+0x210e int16_t  cur_voice
+0x2110 uint8_t  st_2110
+0x2111 uint8_t  st_input_empty
+0x2112 uint8_t  st_idle
+0x2113 uint8_t  st_2113
+0x2114 uint8_t  st_2114
+0x2115 uint8_t  st_2115
+0x2116 uint8_t  st_2116
+0x2117 uint8_t  st_2117
+0x2118 int32_t  out_state
+0x211c uint8_t  skip_text
+0x211d uint8_t  reset_pending    # ESC[S
+0x211e uint8_t  stop_mark        # ESC[x
+0x2120 int32_t  reset_value
+0x2124 uint32_t out_count        # bytes of PCM in out_buf
+0x2128 uint8_t *out_buf          # 0x34bc-byte PCM buffer
+0x212c uint16_t w_212c
+0x212e uint16_t w_212e
+0x2130 uint16_t w_2130
+0x2132 uint16_t w_2132
+0x2134 void    *s2_bytes         # COM byte list the phoneme trace goes to
+0x2138 uint32_t item_notify
+0x213c StageCtx *stage           # stage currently running (StageBegin..StageEnd)
+0x2140 int32_t  free_nodes
+0x2144 StageCtx stage_ctx[5]
+0x2298 Node    *work_tail
+0x229c Node    *work_head
+0x22a0 Node     work_tail_node
+0x22c0 Node     work_head_node
+0x22e0 Node    *free_tail
+0x22e4 Node    *free_head
+0x22e8 Node     free_tail_node
+0x2308 Node     free_head_node
+0x2328 Node     pool[618]
+0x7068 uint8_t  in_ring[4096]    # raw input characters
+0x8068 int32_t  in_rd
+0x806c int32_t  in_wr
+0x8070 uint8_t  pre_ring[256]    # characters waiting for the preformatter
+0x8170 int32_t  pre_rd
+0x8174 int32_t  pre_wr
+0x8178 uint8_t  mid_ring[4096]   # preformatted characters for stage 1
+0x9178 int32_t  mid_rd
+0x917c int32_t  mid_wr
+0x9180 int32_t  e_9180
+end
+
+# A token of the TextIn front end (malloc'd, 0x3c bytes).  `bits` is a
+# 96-bit class set stored most-significant word first: class k lives in
+# bits[2 - k/32] (see Bits_Test).
+struct Token 0x3c
+0x00 Token    *prev
+0x04 Token    *next
+0x08 int16_t   w08
+0x0a int16_t   w0a
+0x0c uint32_t  bits[3]
+0x18 void     *d18
+0x1c uint32_t  d1c
+0x20 char     *text
+0x24 int16_t   len
+0x28 char     *text2            # replacement text emitted instead of `text`
+0x2c char     *types            # per-char split marks: 1 plain, 2 split before, 3 split after
+0x30 uint8_t   trail            # character that ended the token (emitted after it)
+0x34 int16_t   w34
+0x36 int16_t   is_number
+0x38 int32_t   num              # value of an all-digit token
+end
+
+# The TextIn front end (operator new'd, 0x70 bytes): tokenizes the raw input
+# ring, classifies and expands tokens, and feeds their text on to the
+# preformatter.
+struct TextIn 0x70
+0x00 Engine   *engine
+0x04 int32_t   d04
+0x08 int32_t   input_done       # engine input ring ran dry
+0x0c int32_t   item_done        # current TextData item fully fed
+0x10 int32_t   mode
+0x18 int32_t   d18
+0x1c Token    *head
+0x20 Token    *tail
+0x24 Token    *cur              # tokens up to here are expanded
+0x28 int32_t   count
+0x32 int16_t   in_quote         # mode 4: inside a quoted block
+0x34 int16_t   quote_len        # length of the detected quote prefix
+0x36 int16_t   quote_count      # consecutive quoted lines seen
+0x38 char      quote_prefix[12]
+0x44 int32_t   err[10]
+0x6c int32_t   nerr
+end
+
+# The SAPI "central" object that owns the engine thread.  Only the fields the
+# engine itself touches are described; it exists only when the engine runs
+# behind the SAPI layer (the portable build leaves Engine.sapi NULL).
+struct SapiCentral 0xc10
+0x0064 int32_t  voice
+0x0068 uint8_t  mode_info[0xaf0]
+0x0b60 void    *audio_queue
+0x0b6c uint8_t  audio_lock[24]    # CRITICAL_SECTION
+0x0b90 int16_t  pitch
+0x0b94 int32_t  speed
+0x0b9c int32_t  volume
+0x0bac int32_t  ctx
+0x0be0 void    *hwnd
+end

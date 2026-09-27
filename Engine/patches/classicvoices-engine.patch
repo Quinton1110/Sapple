@@ -1,0 +1,946 @@
+diff --git a/Engine/sam/sam.c b/Engine/sam/sam.c
+index 76e52bc..3a4601c 100644
+--- a/Engine/sam/sam.c
++++ b/Engine/sam/sam.c
+@@ -12,6 +12,10 @@
+ #include <stdlib.h>
+ #include <string.h>
+ 
++#ifdef CV_NO_DEBUG_ENV /* ClassicVoices patch: the shipped screen-reader voice never prints what it speaks */
++#define getenv(name) ((char *)0)
++#endif
++
+ #define SPD_MAGIC 0x61746144u /* "Data" */
+ #define MAX_CB 16
+ #define CHUNK_FLUSH 4999      /* Synth_RenderChunk flushes once the chunk exceeds this */
+@@ -50,6 +54,9 @@ struct sam_synth {
+     unsigned vib_state;  /* synth +0x80 */
+     float *buf;          /* scratch output */
+     size_t buf_cap;
++    /* ClassicVoices patch (singing mode): the speech settings saved while a sing call runs */
++    int sing_on, sv_smooth;
++    float sv_vib, sv_vib_rate;
+ };
+ 
+ /* ------------------------------------------------------------------------------------------ */
+@@ -524,6 +531,30 @@ sam_synth *sam_synth_new(const sam_voice *v, const sam_params *p)
+     return s;
+ }
+ 
++/* ClassicVoices patch (singing mode): on = 1 saves the synth's smooth / singer's-vibrato settings and sets
++ * smooth frames (as sam_say --sing does) and the given vibrato, from phase 0; on = 0 restores them exactly. */
++void sam_synth_set_singing(sam_synth *s, int on, float vib_cents, float vib_rate)
++{
++    if (!s) return;
++    if (on) {
++        if (!s->sing_on) {
++            s->sv_smooth = s->p.smooth;
++            s->sv_vib = s->p.sing_vibrato;
++            s->sv_vib_rate = s->p.sing_vibrato_rate;
++            s->sing_on = 1;
++        }
++        s->p.smooth = 1;
++        s->p.sing_vibrato = vib_cents;
++        s->p.sing_vibrato_rate = vib_rate > 0.0f ? vib_rate : 5.5f;
++        s->svib_phase = 0.0;
++    } else if (s->sing_on) {
++        s->p.smooth = s->sv_smooth;
++        s->p.sing_vibrato = s->sv_vib;
++        s->p.sing_vibrato_rate = s->sv_vib_rate;
++        s->sing_on = 0;
++    }
++}
++
+ void sam_synth_free(sam_synth *s)
+ {
+     if (!s) return;
+@@ -775,6 +806,7 @@ int sam_synth_segment(sam_synth *s, const sam_segment *g_in, sam_pcm_cb cb, void
+         int f = frame[e], src_n = offs[f + 1] - offs[f], n = len[e];
+         const float *src = u.exc + offs[f];
+         float *dst = out + n_out, amp, *a;
++        float ai[33]; /* ClassicVoices patch: the smoothed filter, used after the block below (was scoped inside it) */
+         if (s->chunk_pos + n > CHUNK_GUARD) n = GUARD_PERIOD;
+         amp = (float)knot_interp(&g, g.amp, (double)tsamp);
+         /* Excitation_FetchPeriod (FUN_5ed42e40) */
+@@ -791,7 +823,7 @@ int sam_synth_segment(sam_synth *s, const sam_segment *g_in, sam_pcm_cb cb, void
+         a[0] = 1.0f;
+         if (s->p.smooth && u.nframes > 1) {
+             /* blend with the neighbouring frame at this point of the unit (not in the original) */
+-            float lsf[32], ai[33], *tmp;
++            float lsf[32], *tmp;
+             double src_pos = s->w_on ? warp(s, (double)tsamp + 0.5 * n) : ((double)tsamp + 0.5 * n) / (double)rate, c0, c1, w;
+             int f0 = 0, j2;
+             while (f0 + 1 < u.nframes && 0.5 * (offs[f0 + 1] + offs[f0 + 2]) <= src_pos) f0++;
+diff --git a/Engine/sam/sam.h b/Engine/sam/sam.h
+index 7a93bf9..03fa1e2 100644
+--- a/Engine/sam/sam.h
++++ b/Engine/sam/sam.h
+@@ -108,6 +108,30 @@ int sam_tts_speak_ex(sam_tts *t, const char *text, const sam_speak_opts *opts, s
+  * "- 2" for a rest, "tempo 120" to set beats per minute. Not part of the original engine. */
+ int sam_tts_sing(sam_tts *t, const char *score, sam_pcm_cb cb, void *user);
+ 
++/* ClassicVoices patch (singing mode for screen readers). Syllables are counted from the word's actual
++ * pronunciation - its vowel nuclei, which win over the lexicon's syllable marks when the two disagree
++ * ("stylish" has no mark but two vowels) - and every syllable gets exactly one note. */
++typedef struct {
++    volatile const int *cancel; /* checked between sounds: nonzero stops the call (returns 1) */
++    double tempo_scale;         /* sam_tts_sing_text: multiplies its tempo (e.g. 3^(SAPI rate/10)); 0 = 1 */
++    double transpose;           /* semitones added to every note (on top of sam_params.transpose) */
++    float vibrato_cents;        /* singer's vibrato depth (0 = none) and speed in Hz */
++    float vibrato_rate;
++    int mismatches;             /* out, sam_tts_sing_ex: words whose note count differed from their syllables */
++} sam_sing_opts;
++
++/* A literal score (as sam_tts_sing), with options. A word with more notes than syllables has the extra notes
++ * merged into its last syllable, one with fewer has its last note held over the rest; both are counted in
++ * o->mismatches. Returns 0, 1 when cancelled, -1 on error. */
++int sam_tts_sing_ex(sam_tts *t, const char *score, sam_sing_opts *o, sam_pcm_cb cb, void *user);
++
++/* Sing plain text: the normalizer and lexicon as for speech, then an automatic melody (one note per syllable,
++ * see sam_front.c "the melody"). Returns 0, 1 when cancelled, -1 on error. */
++int sam_tts_sing_text(sam_tts *t, const char *text, sam_sing_opts *o, sam_pcm_cb cb, void *user);
++
++/* 1 if the text looks like a literal score (starts with "tempo " or has a line "word NOTE BEATS"). */
++int sam_sing_is_score(const char *text);
++
+ /* ---- lower-level access, useful for tools and experiments ---- */
+ 
+ typedef struct {
+diff --git a/Engine/sam/sam_front.c b/Engine/sam/sam_front.c
+index 9f07111..ba920fa 100644
+--- a/Engine/sam/sam_front.c
++++ b/Engine/sam/sam_front.c
+@@ -22,6 +22,10 @@
+ #include <stdlib.h>
+ #include <string.h>
+ 
++#ifdef CV_NO_DEBUG_ENV /* ClassicVoices patch: the shipped screen-reader voice never prints what it speaks */
++#define getenv(name) ((char *)0)
++#endif
++
+ #define SIL 17
+ #define ST1 43
+ #define ST2 44
+@@ -1698,7 +1702,10 @@ static int speak_sentence(sam_tts *t, wordlist *l, sam_pcm_cb cb, void *user)
+         g.n_knots = 20;
+         for (j = 0; j < 20; j++) {
+             g.t[j] = (float)((double)x->t[j] * 22050.0);
+-            g.f0[j] = t->monotone ? t->base_pitch : x->f0[j];
++            /* ClassicVoices patch: a monotone voice still follows the host's pitch shift (log2 offset) */
++            g.f0[j] = t->monotone ? (float)((double)t->base_pitch *
++                                            (o && o->pitch_offset != 0.0f ? pow(2.0, (double)o->pitch_offset) : 1.0))
++                                  : x->f0[j];
+             g.amp[j] = x->amp;
+         }
+         rc = sam_synth_segment(t->synth, &g, hold, t);
+@@ -1750,111 +1757,80 @@ static int is_sonorant(int ph)
+            ph == sapi_to_internal(33) || ph == sapi_to_internal(34);
+ }
+ 
+-int sam_tts_sing(sam_tts *t, const char *score, sam_pcm_cb cb, void *user)
++/* ClassicVoices patch: the syllables of a word's pronunciation (internal phone ids, with SYL / stress marks).
++ * The count is the number of vowel nuclei; when the lexicon's syllable marks agree with it they place the
++ * boundaries, otherwise (a missing mark: "stylish" = s t ay 1 l ih sh, or "rofl" = r aa f l) the boundaries
++ * go between the vowels: of the consonants between two vowels the last starts the next syllable and the rest
++ * close the previous one (never an onset English cannot start with). A word with no vowel is one syllable.
++ * syl[j] = syllable of phone j (marks follow the phone before them); stress[i] = 1 / 2 for a primary /
++ * secondary stress mark in syllable i (cap entries). Returns the syllable count. */
++static int syllabify(const int *ph, int n, int *syl, int *stress, int cap)
+ {
+-    sing_note *notes = calloc(SING_MAX_NOTES, sizeof *notes);
+-    wordlist l = {0};
+-    itemlist il = {0};
+-    double tempo = 100.0;
+-    const char *p = score;
+-    int nnotes = 0, rc = 0, k;
+-    if (!notes) return -1;
+-    t->out_cb = cb;
+-    t->out_user = user;
+-    t->npend = 0;
+-    sam_synth_chunk_reset(t->synth);
+-    /* one line per word: "twin-kle C4 1 C4 1", "- 1" (rest), "tempo 120" */
+-    while (*p && rc == 0) {
+-        char line[512], *tok[64];
+-        int nt = 0, i;
+-        size_t n = strcspn(p, "\r\n");
+-        if (n >= sizeof line) n = sizeof line - 1;
+-        memcpy(line, p, n);
+-        line[n] = 0;
+-        p += n;
+-        while (*p == '\r' || *p == '\n') p++;
+-        for (i = 0; line[i] == ' ' || line[i] == '\t'; i++) {
++    int j, nv = 0, nmark = 0, real = 0, cur = 0, last_real = -1;
++    for (j = 0; j < n; j++) {
++        if (ph[j] == SYL) nmark++;
++        else if (ph[j] >= 0 && ph[j] < 43) {
++            real++;
++            if (is_vowel(ph[j])) nv++;
+         }
+-        if (!line[i] || line[i] == '#') continue;
+-        {
+-            char *s = line + i;
+-            while (*s && nt < 64) {
+-                tok[nt++] = s;
+-                while (*s && *s != ' ' && *s != '\t') s++;
+-                if (*s) *s++ = 0;
+-                while (*s == ' ' || *s == '\t') s++;
+-            }
+-        }
+-        if (!strcmp(tok[0], "tempo") && nt > 1) {
+-            tempo = atof(tok[1]);
+-            if (tempo <= 0.0) tempo = 100.0;
+-            continue;
+-        }
+-        if (!strcmp(tok[0], "-")) { /* rest */
+-            word *w;
+-            if (nnotes >= SING_MAX_NOTES) break;
+-            notes[nnotes].hz = 0.0;
+-            notes[nnotes].sec = (nt > 1 ? atof(tok[1]) : 1.0) * 60.0 / tempo;
+-            w = wl_insert(&l, l.n);
+-            if (!w) {
+-                rc = -1;
+-                break;
+-            }
+-            w->ph[0] = SIL;
+-            w->nph = 1;
+-            w->note[0] = (short)(nnotes + 1);
+-            w->silence_ms = (int)(notes[nnotes].sec * 1000.0);
+-            nnotes++;
+-            continue;
++    }
++    for (j = 0; j < cap; j++) stress[j] = 0;
++    if (!real) {
++        for (j = 0; j < n; j++) syl[j] = 0;
++        return 1;
++    }
++    if (nv == 0) {
++        for (j = 0; j < n; j++) syl[j] = 0;
++    } else if (nmark + 1 == nv) {
++        for (j = 0; j < n; j++) {
++            if (ph[j] == SYL) cur++;
++            syl[j] = cur;
+         }
+-        {
+-            char text[128];
+-            sam_lookup r;
+-            word *w;
+-            int first = nnotes, cnt = 0, syl = 0, j, o = 0;
+-            for (j = 0; tok[0][j] && o < 127; j++)
+-                if (tok[0][j] != '-') text[o++] = tok[0][j];
+-            text[o] = 0;
+-            for (j = 1; j + 1 < nt && nnotes < SING_MAX_NOTES; j += 2) {
+-                notes[nnotes].hz = note_hz(tok[j]) * pow(2.0, (double)t->transpose / 12.0);
+-                notes[nnotes].sec = atof(tok[j + 1]) * 60.0 / tempo;
+-                nnotes++;
+-                cnt++;
+-            }
+-            if (!cnt || !sam_word_lookup(t->lex, t->lts, text, &r)) continue;
+-            w = wl_insert(&l, l.n);
+-            if (!w) {
+-                rc = -1;
+-                break;
+-            }
+-            snprintf(w->text, sizeof w->text, "%s", text);
+-            w->pos = r.posa[0];
+-            w->cls = pos_class(w->pos);
+-            w->rate = 1.0f;
+-            for (j = 0; j < r.n && w->nph < MAX_WORD_PH; j++) {
+-                int ph = sapi_to_internal(r.pron[j]);
+-                if (ph == SYL) syl++;
+-                if (ph < 0) continue;
+-                w->ph[w->nph] = ph;
+-                w->note[w->nph] = (short)(first + (syl < cnt ? syl : cnt - 1) + 1);
+-                w->nph++;
++    } else {
++        int k = 0; /* vowels seen */
++        for (j = 0; j < n; j++) {
++            if (ph[j] < 0 || ph[j] >= 43) { /* a mark: with the phone before it */
++                syl[j] = last_real >= 0 ? syl[last_real] : 0;
++                continue;
+             }
+-            /* more notes than syllables: the last syllable holds them all */
+-            for (j = first + syl + 1; j < first + cnt; j++) {
+-                notes[first + syl].sec += notes[j].sec;
+-                notes[j].sec = 0.0;
++            if (is_vowel(ph[j])) {
++                syl[j] = k++;
++            } else if (k == 0 || k == nv) {
++                syl[j] = k == 0 ? 0 : nv - 1;
++            } else { /* between vowel k-1 and vowel k: is another consonant still to come before it? */
++                int m, more = 0;
++                for (m = j + 1; m < n && !(ph[m] >= 0 && ph[m] < 43 && is_vowel(ph[m])); m++)
++                    if (ph[m] >= 0 && ph[m] < 43) more = 1;
++                syl[j] = more ? k - 1 : k;
+             }
++            last_real = j;
+         }
++        if (nv < 1) nv = 1;
+     }
+-    if (rc == 0 && l.n > 0) {
+-        word *w = wl_insert(&l, l.n); /* the sentence-final silence */
++    {
++        int ns = nv ? nv : 1;
++        for (j = 0; j < n; j++)
++            if ((ph[j] == ST1 || ph[j] == ST2) && syl[j] < cap && syl[j] < ns && !stress[syl[j]])
++                stress[syl[j]] = ph[j] == ST1 ? 1 : 2;
++        return ns;
++    }
++}
++
++/* The shared back half of the sing calls: a word list whose phones carry note numbers -> items, notes fitted,
++ * audio (the original sam_tts_sing's code, unchanged apart from the cancel check). */
++static int sing_render(sam_tts *t, wordlist *l, sing_note *notes, int nnotes, volatile const int *cancel)
++{
++    itemlist il = {0};
++    int rc = 0, k;
++    if (rc == 0 && l->n > 0) {
++        word *w = wl_insert(l, l->n); /* the sentence-final silence */
+         if (w) {
+             w->ph[0] = SIL;
+             w->nph = 1;
+             w->btype = 5;
+             w->x694 = 1;
+         }
+-        if (build_items(&l, &il) != 0) rc = -1;
++        if (build_items(l, &il) != 0) rc = -1;
+     }
+     if (rc == 0 && il.n > 0) {
+         position_flags(&il);
+@@ -1898,6 +1874,10 @@ int sam_tts_sing(sam_tts *t, const char *score, sam_pcm_cb cb, void *user)
+         for (k = 0; k < il.n && rc == 0; k++) {
+             item *x = &il.it[k];
+             sam_segment g;
++            if (cancel && *cancel) { /* ClassicVoices patch: cancellable between sounds */
++                rc = 1;
++                break;
++            }
+             double hz = 100.0;
+             int j, i;
+             /* pitch: the note of this item, else the nearest sung note (silences, rests) */
+@@ -1926,14 +1906,325 @@ int sam_tts_sing(sam_tts *t, const char *score, sam_pcm_cb cb, void *user)
+             if (rc == 0) release(t, (size_t)sam_synth_chunk_pos(t->synth));
+         }
+     }
++    free(il.it);
++    return rc;
++}
++
++static void sing_begin(sam_tts *t, const sam_sing_opts *o, sam_pcm_cb cb, void *user)
++{
++    t->out_cb = cb;
++    t->out_user = user;
++    t->npend = 0;
++    sam_synth_chunk_reset(t->synth);
++    if (o) sam_synth_set_singing(t->synth, 1, o->vibrato_cents, o->vibrato_rate);
++}
++
++static void sing_end(sam_tts *t, const sam_sing_opts *o, int rc)
++{
+     if (rc == 0) release(t, 0);
+     t->npend = 0;
+-    free(il.it);
++    if (o) sam_synth_set_singing(t->synth, 0, 0.0f, 0.0f);
++}
++
++/* ClassicVoices patch: a beat count from a pasted score, 0..32 (NaN and negatives 0) */
++static double sane_beats(double b) { return b > 0.0 ? (b < 32.0 ? b : 32.0) : 0.0; }
++
++int sam_tts_sing(sam_tts *t, const char *score, sam_pcm_cb cb, void *user)
++{
++    return sam_tts_sing_ex(t, score, NULL, cb, user);
++}
++
++int sam_tts_sing_ex(sam_tts *t, const char *score, sam_sing_opts *o, sam_pcm_cb cb, void *user)
++{
++    sing_note *notes = calloc(SING_MAX_NOTES, sizeof *notes);
++    wordlist l = {0};
++    double tempo = 100.0, shift = pow(2.0, ((double)t->transpose + (o ? o->transpose : 0.0)) / 12.0);
++    const char *p = score;
++    int nnotes = 0, rc = 0;
++    if (!notes) return -1;
++    if (o) o->mismatches = 0;
++    sing_begin(t, o, cb, user);
++    /* one line per word: "twin-kle C4 1 C4 1", "- 1" (rest), "tempo 120" */
++    while (*p && rc == 0) {
++        char line[512], *tok[64];
++        int nt = 0, i;
++        size_t n = strcspn(p, "\r\n");
++        if (n >= sizeof line) n = sizeof line - 1;
++        memcpy(line, p, n);
++        line[n] = 0;
++        p += n;
++        while (*p == '\r' || *p == '\n') p++;
++        for (i = 0; line[i] == ' ' || line[i] == '\t'; i++) {
++        }
++        if (!line[i] || line[i] == '#') continue;
++        {
++            char *s = line + i;
++            while (*s && nt < 64) {
++                tok[nt++] = s;
++                while (*s && *s != ' ' && *s != '\t') s++;
++                if (*s) *s++ = 0;
++                while (*s == ' ' || *s == '\t') s++;
++            }
++        }
++        if (!strcmp(tok[0], "tempo") && nt > 1) {
++            tempo = atof(tok[1]);
++            if (!(tempo > 0.0)) tempo = 100.0;
++            if (tempo < 20.0) tempo = 20.0; /* ClassicVoices patch: pasted scores are untrusted - keep them sane */
++            if (tempo > 1000.0) tempo = 1000.0;
++            continue;
++        }
++        if (!strcmp(tok[0], "-")) { /* rest */
++            word *w;
++            if (nnotes >= SING_MAX_NOTES) break;
++            notes[nnotes].hz = 0.0;
++            notes[nnotes].sec = sane_beats(nt > 1 ? atof(tok[1]) : 1.0) * 60.0 / tempo;
++            w = wl_insert(&l, l.n);
++            if (!w) {
++                rc = -1;
++                break;
++            }
++            w->ph[0] = SIL;
++            w->nph = 1;
++            w->note[0] = (short)(nnotes + 1);
++            w->silence_ms = (int)(notes[nnotes].sec * 1000.0);
++            nnotes++;
++            continue;
++        }
++        {
++            char text[128];
++            sam_lookup r;
++            word *w;
++            int first = nnotes, cnt = 0, j, o2 = 0, nsyl, syl[MAX_WORD_PH], st[MAX_WORD_PH];
++            for (j = 0; tok[0][j] && o2 < 127; j++)
++                if (tok[0][j] != '-') text[o2++] = tok[0][j];
++            text[o2] = 0;
++            for (j = 1; j + 1 < nt && nnotes < SING_MAX_NOTES; j += 2) {
++                double hz = note_hz(tok[j]) * shift;
++                if (hz > 0.0 && hz < 30.0) hz = 30.0; /* ClassicVoices patch: an out-of-range note stays audible */
++                if (hz > 2000.0) hz = 2000.0;
++                notes[nnotes].hz = hz;
++                notes[nnotes].sec = sane_beats(atof(tok[j + 1])) * 60.0 / tempo;
++                nnotes++;
++                cnt++;
++            }
++            if (!cnt || !sam_word_lookup(t->lex, t->lts, text, &r)) continue;
++            w = wl_insert(&l, l.n);
++            if (!w) {
++                rc = -1;
++                break;
++            }
++            snprintf(w->text, sizeof w->text, "%s", text);
++            w->pos = r.posa[0];
++            w->cls = pos_class(w->pos);
++            w->rate = 1.0f;
++            for (j = 0; j < r.n && w->nph < MAX_WORD_PH; j++) {
++                int ph = sapi_to_internal(r.pron[j]);
++                if (ph < 0) continue;
++                w->ph[w->nph++] = ph;
++            }
++            nsyl = syllabify(w->ph, w->nph, syl, st, MAX_WORD_PH);
++            for (j = 0; j < w->nph; j++) w->note[j] = (short)(first + (syl[j] < cnt ? syl[j] : cnt - 1) + 1);
++            if (cnt != nsyl && o) o->mismatches++;
++            /* more notes than syllables: the last syllable holds them all */
++            for (j = first + nsyl; j < first + cnt; j++) {
++                notes[first + nsyl - 1].sec += notes[j].sec;
++                notes[j].sec = 0.0;
++            }
++        }
++    }
++    if (rc == 0 && l.n > 0) rc = sing_render(t, &l, notes, nnotes, o ? o->cancel : NULL);
++    sing_end(t, o, rc);
+     free(l.w);
+     free(notes);
+     return rc;
+ }
+ 
++int sam_sing_is_score(const char *text)
++{
++    const char *p = text;
++    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
++    if (!strncmp(p, "tempo ", 6)) return 1;
++    while (*p) { /* a line "word NOTE BEATS [NOTE BEATS ...]" */
++        const char *e = p + strcspn(p, "\r\n"), *q = p;
++        char tok[3][32];
++        int nt = 0;
++        while (q < e && nt < 3) {
++            size_t k = 0;
++            while (q < e && (*q == ' ' || *q == '\t')) q++;
++            while (q < e && *q != ' ' && *q != '\t' && k + 1 < sizeof tok[0]) tok[nt][k++] = *q++;
++            while (q < e && *q != ' ' && *q != '\t') q++;
++            if (k) {
++                tok[nt][k] = 0;
++                nt++;
++            }
++        }
++        if (nt == 3 && isalpha((unsigned char)tok[0][0]) && isupper((unsigned char)tok[1][0]) && note_hz(tok[1]) > 0.0 &&
++            (isdigit((unsigned char)tok[2][0]) || tok[2][0] == '.'))
++            return 1;
++        p = *e ? e + 1 : e;
++    }
++    return 0;
++}
++
++/* ---- the melody: plain text (what VoiceOver sends) -> one note per syllable ----
++ *
++ * Deterministic, a simple sing-song in a major key a fourth above the voice's speaking pitch (Sam C3, Mike D3,
++ * Mary B3). Each sentence walks up and down the scale, 3-4-5-5-6-5-4-3 (scale steps from the key note = 1),
++ * continuing across its words; a stressed syllable (the lexicon's stress mark) is lifted to the nearest note of
++ * the home chord at or above it and lasts a beat, every other syllable half a beat. Phrase ends: a statement
++ * resolves down to the key note (3-2-1, the last note two beats); a question rises (3-5-8, the last one and a half
++ * beats); a comma or other pause inside the sentence stops on the fifth (4-5) with half a beat's rest. Sentences
++ * end with a beat's rest. 132 beats a minute, times the speaking-rate factor. */
++static const int SCALE[10] = {0, 2, 4, 5, 7, 9, 11, 12, 14, 16};
++static const int WALK[8] = {2, 3, 4, 4, 5, 4, 3, 2};
++
++typedef struct {
++    int word, syl, stress, rest, btype; /* rest: a silence word (btype of it) */
++} sing_ev;
++
++static int sing_sentence(sam_tts *t, wordlist *l, int final_bt, double tonic, double tempo, volatile const int *cancel)
++{
++    sing_ev *ev = NULL;
++    sing_note *notes = NULL;
++    int nev = 0, cap = 0, i, j, rc = 0, walk = 0, *wfirst = NULL;
++    int syl[MAX_WORD_PH], st[MAX_WORD_PH];
++    const double beat = 60.0 / tempo;
++    if (!l->n) return 0;
++    wfirst = calloc((size_t)l->n, sizeof *wfirst);
++    if (!wfirst) return -1;
++    for (i = 0; i < l->n; i++) {
++        word *w = &l->w[i];
++        int nsyl;
++        wfirst[i] = nev;
++        if (is_silence_word(w) && w->nph == 1) {
++            nsyl = 1;
++            st[0] = 0;
++        } else {
++            nsyl = syllabify(w->ph, w->nph, syl, st, MAX_WORD_PH);
++        }
++        if (nev + nsyl > cap) {
++            int nc = (nev + nsyl) * 2 + 16;
++            sing_ev *ne = realloc(ev, sizeof *ev * (size_t)nc);
++            if (!ne) {
++                rc = -1;
++                goto out;
++            }
++            ev = ne;
++            cap = nc;
++        }
++        for (j = 0; j < nsyl; j++) {
++            ev[nev].word = i;
++            ev[nev].syl = j;
++            ev[nev].stress = j < MAX_WORD_PH ? st[j] : 0;
++            ev[nev].rest = is_silence_word(w) && w->nph == 1;
++            ev[nev].btype = w->btype;
++            nev++;
++        }
++        if (!(is_silence_word(w) && w->nph == 1))
++            for (j = 0; j < w->nph; j++) w->note[j] = (short)(wfirst[i] + syl[j] + 1);
++        else
++            w->note[0] = (short)(wfirst[i] + 1);
++    }
++    notes = calloc((size_t)nev + 1, sizeof *notes);
++    if (!notes) {
++        rc = -1;
++        goto out;
++    }
++    /* phrases: the syllables between rests */
++    for (i = 0; i < nev;) {
++        int a = i, b, m, last_rest, q;
++        while (i < nev && !ev[i].rest) i++;
++        b = i; /* syllables a..b-1, then the rest at b (if any) */
++        m = b - a;
++        last_rest = 1;
++        for (q = b; q < nev; q++)
++            if (!ev[q].rest) last_rest = 0;
++        for (j = a; j < b; j++) {
++            int deg = WALK[walk++ % 8], pos = j - a, fromend = m - 1 - pos;
++            double beats = ev[j].stress == 1 ? 1.0 : 0.5;
++            if (ev[j].stress == 1 && deg != 0 && deg != 2 && deg != 4 && deg != 7) deg = deg < 4 ? 4 : 7;
++            if (last_rest) { /* the sentence's cadence */
++                if (final_bt == 3 || final_bt == 4) {
++                    static const int Q[3] = {7, 4, 2};
++                    if (fromend < 3 && m >= fromend + 1) deg = Q[fromend];
++                    if (fromend == 0) beats = 1.5;
++                } else {
++                    static const int D[3] = {0, 1, 2};
++                    if (fromend < 3 && m >= fromend + 1) deg = D[fromend];
++                    if (fromend == 0) beats = 2.0;
++                    else if (fromend == 1 && beats < 1.0) beats = 1.0;
++                }
++            } else if (fromend < 2) { /* a pause inside the sentence: stop on the fifth */
++                deg = fromend == 0 ? 4 : 3;
++                if (fromend == 0) beats = 1.5;
++            }
++            notes[j].hz = 440.0 * pow(2.0, (tonic + SCALE[deg] - 69.0) / 12.0);
++            notes[j].sec = beats * beat;
++        }
++        if (i < nev) { /* the rest */
++            notes[i].hz = 0.0;
++            notes[i].sec = (last_rest ? 1.0 : 0.5) * beat;
++            i++;
++        }
++    }
++    rc = sing_render(t, l, notes, nev, cancel);
++out:
++    free(wfirst);
++    free(ev);
++    free(notes);
++    return rc;
++}
++
++int sam_tts_sing_text(sam_tts *t, const char *text, sam_sing_opts *o, sam_pcm_cb cb, void *user)
++{
++    sam_norm *nm;
++    sam_sentence s = {0};
++    int rc = 0, k = 0, in_quote = t->in_quote, in_paren = t->in_paren;
++    float st_off = t->st_off, st_rng = t->st_rng, st_rate = t->st_rate;
++    uint32_t rs = t->rand_state;
++    double tempo = 132.0 * (o && o->tempo_scale > 0.0 ? o->tempo_scale : 1.0);
++    /* the key note: a fourth above the voice's speaking pitch, as a MIDI number, plus any transposition */
++    double tonic = floor(12.0 * log2((double)t->base_pitch / 440.0) + 69.0 + 0.5) + 5.0 + (double)t->transpose +
++                   (o ? o->transpose : 0.0);
++    if (tempo < 50.0) tempo = 50.0;
++    if (tempo > 480.0) tempo = 480.0;
++    nm = sam_norm_new(text);
++    if (!nm) return -1;
++    sing_begin(t, o, cb, user);
++    while (rc == 0 && (k = sam_norm_next(nm, t->lex, t->lts, &s)) > 0) {
++        wordlist l = {0};
++        if (o && o->cancel && *o->cancel) {
++            rc = 1;
++            break;
++        }
++        rc = build_words(t, &s, &l);
++        if (rc == 0 && l.n > 0) {
++            int j, sung = 0;
++            for (j = 0; j < l.n; j++)
++                if (!(is_silence_word(&l.w[j]) && l.w[j].nph == 1)) sung = 1;
++            if (!sung) l.n = 0; /* nothing but pauses (a trailing newline): no rest either */
++        }
++        if (rc == 0 && l.n > 0) {
++            int final_bt = l.w[l.n - 1].btype;
++            rc = sing_sentence(t, &l, final_bt, tonic, tempo, o ? o->cancel : NULL);
++        }
++        if (rc == 0) release(t, (size_t)sam_synth_chunk_pos(t->synth));
++        free(l.w);
++    }
++    if (k < 0) rc = -1;
++    sing_end(t, o, rc);
++    /* the speech path's running state is left as it was: singing never changes how the voice speaks next */
++    t->in_quote = in_quote;
++    t->in_paren = in_paren;
++    t->st_off = st_off;
++    t->st_rng = st_rng;
++    t->st_rate = st_rate;
++    t->rand_state = rs;
++    sam_sentence_free(&s);
++    sam_norm_free(nm);
++    return rc;
++}
++
+ /* shared tail of the constructors; takes the loaded parts (NULL = failed) */
+ static sam_tts *tts_finish(sam_tts *t, const sam_params *p, char *err, size_t errlen)
+ {
+diff --git a/Engine/sam/sam_internal.h b/Engine/sam/sam_internal.h
+index 93f0a1f..dd24669 100644
+--- a/Engine/sam/sam_internal.h
++++ b/Engine/sam/sam_internal.h
+@@ -30,6 +30,7 @@ struct sam_tts {
+ };
+ 
+ int sam_synth_chunk_pos(const sam_synth *s);
++void sam_synth_set_singing(sam_synth *s, int on, float vib_cents, float vib_rate); /* ClassicVoices patch */
+ void sam_synth_chunk_reset(sam_synth *s);
+ 
+ /* Raw access to a section of the .spd voice file (0..4). */
+diff --git a/Engine/sam/sam_pos.c b/Engine/sam/sam_pos.c
+index 119c917..9e41ed3 100644
+--- a/Engine/sam/sam_pos.c
++++ b/Engine/sam/sam_pos.c
+@@ -575,7 +575,34 @@ int sam_pos_process(const sam_lexicon *lex, const sam_lts *lts, sam_node *nodes,
+             } else {
+                 sam_lookup r;
+                 uint32_t lock = x->lock;
+-                if (!sam_word_lookup_pos(lex, lts, x->text, lock, &r)) return -1; /* SPERR_NOT_IN_LEX */
++                if (!sam_word_lookup_pos(lex, lts, x->text, lock, &r)) {
++#ifdef SAM_STRICT_NOT_IN_LEX
++                    return -1; /* SPERR_NOT_IN_LEX: the original engine drops the whole Speak call */
++#else
++                    /* ClassicVoices patch: a screen reader must never lose the rest of the text because
++                     * one token is unpronounceable. Retry with the token's ASCII letters (at most 40,
++                     * well inside the letter-to-sound limit), and if that still fails the token
++                     * becomes a silent word instead of an error. */
++                    char alt[48];
++                    int j, m = 0;
++                    for (j = 0; x->text[j] && m < 40; j++) {
++                        int c = (unsigned char)x->text[j];
++                        if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
++                        if (c >= 'a' && c <= 'z') alt[m++] = (char)c;
++                    }
++                    alt[m] = 0;
++                    lock = 0;
++                    x->lock = 0;
++                    if (!m || !sam_word_lookup_pos(lex, lts, alt, 0, &r)) {
++                        memset(&r, 0, sizeof r);
++                        r.pron[0] = 7; /* SAPI "_" (silence): the word keeps its slot but makes no sound */
++                        r.n = 1;
++                        r.posa[0] = 0x1000;
++                        r.nposa = 1;
++                        r.lextype = 0x2000;
++                    }
++#endif
++                }
+                 sam_pos_entry_from_lookup(x, &r);
+                 if (lock) { /* FUN_5ed4b1f9: a forced part of speech picks its pronunciation or is dropped */
+                     int found = 0;
+diff --git a/Engine/sam/sam_tts.c b/Engine/sam/sam_tts.c
+index c343c62..a7605f5 100644
+--- a/Engine/sam/sam_tts.c
++++ b/Engine/sam/sam_tts.c
+@@ -36,6 +36,11 @@ struct sam_speech {
+     sam_params p;
+     int rate, volume, pitch;
+     int fx_preset, fx_on;
++    /* ClassicVoices patch: continuous rate / pitch for hosts (see sam_tts_set_rate_pitch_f) */
++    int use_f;
++    double rate_f, pitch_st;
++    int fx_tail_ms; /* ClassicVoices patch: echo tail after the text, faded out (-1 = upstream: 1 s, unfaded) */
++    size_t held_zeros; /* ClassicVoices patch: trailing exact-zero samples of the dry signal, not yet delivered */
+     volatile int cancel;
+     /* per speak call */
+     const sam_callbacks *cb;
+@@ -84,6 +89,7 @@ sam_speech *sam_tts_open(const char *dir, const char *voice, char *err, size_t e
+         fclose(f);
+     }
+     t->volume = 100;
++    t->fx_tail_ms = -1;
+     if (load_engine(t, err, errlen)) {
+         free(t);
+         return NULL;
+@@ -102,6 +108,28 @@ void sam_tts_set_rate(sam_speech *t, int rate) { t->rate = rate < -10 ? -10 : ra
+ void sam_tts_set_volume(sam_speech *t, int v) { t->volume = v < 0 ? 0 : v > 100 ? 100 : v; }
+ void sam_tts_set_pitch(sam_speech *t, int p) { t->pitch = p < -10 ? -10 : p > 10 ? 10 : p; }
+ void sam_tts_cancel(sam_speech *t) { t->cancel = 1; }
++
++/* ClassicVoices patch: a fractional SAPI rate (-10..18, duration divisor 3^(rate/10), the same curve as the
++ * integer table) and a pitch shift in semitones (-12..12). Used instead of the integer rate / pitch. */
++void sam_tts_set_rate_pitch_f(sam_speech *t, double sapi_rate, double semitones)
++{
++    t->use_f = 1;
++    t->rate_f = sapi_rate < -10.0 ? -10.0 : sapi_rate > 18.0 ? 18.0 : sapi_rate;
++    t->pitch_st = semitones < -12.0 ? -12.0 : semitones > 12.0 ? 12.0 : semitones;
++}
++
++/* ClassicVoices patch: how long the echo effects ring on after the text (ms, faded out); -1 = upstream */
++void sam_tts_set_fx_tail(sam_speech *t, int ms) { t->fx_tail_ms = ms < -1 ? -1 : ms > 5000 ? 5000 : ms; }
++
++/* ClassicVoices patch: replace the voice's base pitch (the .sdf value) - the SAPI 4 RoboSoft voices run the
++ * same synthesis at their own pitch. hz <= 0 keeps the current one. Reloads the voice. */
++int sam_tts_set_base_pitch(sam_speech *t, double hz)
++{
++    char err[256];
++    if (hz <= 0.0 || (float)hz == t->p.base_pitch) return 0;
++    t->p.base_pitch = (float)hz;
++    return load_engine(t, err, sizeof err);
++}
+ int sam_tts_sample_rate(const sam_speech *t)
+ {
+     return t && t->p.out_rate > 0 ? t->p.out_rate : SAM_TTS_SAMPLE_RATE;
+@@ -545,11 +573,32 @@ typedef struct {
+     int volume;
+ } pcm_ctx;
+ 
++static void silence(sam_speech *t, size_t n, int volume);
++
+ static void on_pcm(const int16_t *pcm, size_t n, void *user)
+ {
+     pcm_ctx *c = user;
+     int16_t *b;
+     if (c->t->stopped || !n) return;
++    if (c->t->fx_tail_ms >= 0) {
++        /* ClassicVoices patch: the engine's pauses are runs of exact zeros. Hold the trailing ones back
++         * and deliver them only when more sound follows, so pauses between sentences keep their echo but
++         * the ~300 ms after the last word never reaches the effect (sam_tts_speak drops it). */
++        size_t last = n;
++        while (last > 0 && pcm[last - 1] == 0) last--;
++        if (last == 0) {
++            c->t->held_zeros += n;
++            return;
++        }
++        if (c->t->held_zeros) {
++            size_t z = c->t->held_zeros;
++            c->t->held_zeros = 0;
++            silence(c->t, z, c->volume);
++            if (c->t->stopped) return;
++        }
++        c->t->held_zeros = n - last;
++        n = last;
++    }
+     b = malloc(n * sizeof *b);
+     if (!b) return;
+     memcpy(b, pcm, n * sizeof *b);
+@@ -569,6 +618,70 @@ static void silence(sam_speech *t, size_t n, int volume)
+ 
+ /* ------------------------------------------------------------------ speak */
+ 
++/* ClassicVoices patch (singing mode): sing plain text (an automatic melody) or, literal != 0, a score, through
++ * the same effect / volume / pause handling as sam_tts_speak. The rate scales the tempo, the pitch transposes. */
++int sam_tts_sing_speech(sam_speech *t, const char *utf8, int literal, const sam_sing_cfg *cfg, const sam_callbacks *cb,
++                        int *mismatches)
++{
++    sam_sing_opts so;
++    pcm_ctx pc;
++    double r, st;
++    int rc;
++    if (mismatches) *mismatches = 0;
++    if (!t || !utf8 || !cb) return -1;
++    t->cancel = 0;
++    t->stopped = 0;
++    t->base = 0;
++    t->cb = cb;
++    t->orig = utf8;
++    t->held_zeros = 0;
++    t->bmap = NULL;
++    t->doc = NULL;
++    if (t->fx_on) {
++        t->fx = sam4fx_new(t->fx_preset, sam_tts_sample_rate(t));
++        if (t->fx) {
++            sam4fx_set_input_gain(t->fx, (float)pow(10.0, sam4fx_default_trim_db(t->fx_preset) / 20.0));
++            if (t->p.whisper) {
++                static const float taps[3] = {0.25f, -0.5f, 0.25f};
++                sam4fx_set_fir(t->fx, taps, 3);
++            }
++        }
++    }
++    r = t->use_f ? t->rate_f : (double)t->rate;
++    st = t->use_f ? t->pitch_st : t->pitch * 0.5;
++    r = r < -10.0 ? -10.0 : r > 18.0 ? 18.0 : r;
++    memset(&so, 0, sizeof so);
++    so.cancel = &t->cancel;
++    so.tempo_scale = pow(3.0, r / 10.0);
++    so.transpose = st + (cfg ? cfg->transpose : 0.0);
++    so.vibrato_cents = cfg ? cfg->vibrato_cents : 0.0f;
++    so.vibrato_rate = cfg && cfg->vibrato_rate > 0.0f ? cfg->vibrato_rate : 5.5f;
++    pc.t = t;
++    pc.volume = t->volume < 0 ? 0 : t->volume > 100 ? 100 : t->volume;
++    if (literal) {
++        /* a literal score's tempo line stays as written; the speaking rate does not apply */
++        rc = sam_tts_sing_ex(t->eng, utf8, &so, on_pcm, &pc);
++        if (mismatches) *mismatches = so.mismatches;
++    } else {
++        rc = sam_tts_sing_text(t->eng, utf8, &so, on_pcm, &pc);
++    }
++    t->held_zeros = 0;
++    if (t->fx) {
++        int k;
++        if (t->fx_tail_ms < 0) {
++            for (k = 0; k < 2 && !t->stopped; k++) silence(t, (size_t)(sam_tts_sample_rate(t) / 2), 100);
++        } else {
++            int steps = t->fx_tail_ms / 10;
++            for (k = 0; k < steps && !t->stopped; k++)
++                silence(t, (size_t)(sam_tts_sample_rate(t) / 100), 100 - 100 * (k + 1) / (steps + 1));
++        }
++        sam4fx_free(t->fx);
++        t->fx = NULL;
++    }
++    if (rc >= 0 && (t->cancel || t->stopped)) rc = 1;
++    return rc;
++}
++
+ int sam_tts_speak(sam_speech *t, const char *utf8, int flags, const sam_callbacks *cb)
+ {
+     xdoc *d;
+@@ -582,6 +695,7 @@ int sam_tts_speak(sam_speech *t, const char *utf8, int flags, const sam_callback
+     t->cb = cb;
+     t->orig = utf8;
+     t->next_bm = 0;
++    t->held_zeros = 0;
+     d = xml_prepare(utf8, (flags & SAM_SPEAK_XML) != 0, t->rate, t->volume, t->pitch);
+     if (!d) return -1;
+     t->doc = d;
+@@ -602,6 +716,11 @@ int sam_tts_speak(sam_speech *t, const char *utf8, int flags, const sam_callback
+         pcm_ctx pc;
+         long n = o->end - o->start;
+         if (o->kind == 1) { /* <silence msec="..."/> */
++            if (t->held_zeros) { /* ClassicVoices patch: keep the held pause in order */
++                size_t z = t->held_zeros;
++                t->held_zeros = 0;
++                silence(t, z, 100);
++            }
+             silence(t, (size_t)((long long)o->msec * sam_tts_sample_rate(t) / 1000), o->volume);
+             continue;
+         }
+@@ -629,6 +748,12 @@ int sam_tts_speak(sam_speech *t, const char *utf8, int flags, const sam_callback
+         memset(&so, 0, sizeof so);
+         so.sapi_rate = rate_factor(o->rate < -10 ? -10 : o->rate > 18 ? 18 : o->rate);
+         so.pitch_offset = (float)((o->pitch < -10 ? -10 : o->pitch > 10 ? 10 : o->pitch) * (5.0 / 12.0) / 10.0);
++        if (t->use_f) { /* ClassicVoices patch: continuous values, plus any XML offsets on top */
++            double r = t->rate_f + (o->rate - t->rate);
++            r = r < -10.0 ? -10.0 : r > 18.0 ? 18.0 : r;
++            so.sapi_rate = pow(3.0, r / 10.0);
++            so.pitch_offset = (float)(t->pitch_st / 12.0 + (o->pitch - t->pitch) * (5.0 / 12.0) / 10.0);
++        }
+         so.cancel = &t->cancel;
+         so.mark_cb = on_mark;
+         so.user = t;
+@@ -637,9 +762,16 @@ int sam_tts_speak(sam_speech *t, const char *utf8, int flags, const sam_callback
+         rc = sam_tts_speak_ex(t->eng, run, &so, on_pcm, &pc);
+         if (rc == 0 && !t->cancel) emit_bookmarks(t, t->base, o->end); /* bookmarks after the last word */
+     }
++    t->held_zeros = 0; /* ClassicVoices patch: the silence after the last word is dropped */
+     if (t->fx) { /* let the echoes die away, exactly as sam_say does */
+         int k;
+-        for (k = 0; k < 2 && !t->stopped; k++) silence(t, (size_t)(sam_tts_sample_rate(t) / 2), 100);
++        if (t->fx_tail_ms < 0) {
++            for (k = 0; k < 2 && !t->stopped; k++) silence(t, (size_t)(sam_tts_sample_rate(t) / 2), 100);
++        } else { /* ClassicVoices patch: a shorter tail in 10 ms steps, fading linearly to nothing */
++            int steps = t->fx_tail_ms / 10;
++            for (k = 0; k < steps && !t->stopped; k++)
++                silence(t, (size_t)(sam_tts_sample_rate(t) / 100), 100 - 100 * (k + 1) / (steps + 1));
++        }
+         sam4fx_free(t->fx);
+         t->fx = NULL;
+     }
+diff --git a/Engine/sam/sam_tts.h b/Engine/sam/sam_tts.h
+index 63c98e7..2532d8a 100644
+--- a/Engine/sam/sam_tts.h
++++ b/Engine/sam/sam_tts.h
+@@ -76,6 +76,14 @@ SAM_API void sam_tts_set_rate(sam_speech *t, int rate);
+ SAM_API void sam_tts_set_volume(sam_speech *t, int volume);
+ SAM_API void sam_tts_set_pitch(sam_speech *t, int pitch);
+ 
++/* ClassicVoices patch: continuous rate (SAPI scale -10..18, may be fractional) and pitch in semitones
++ * (-12..12); once called these replace set_rate / set_pitch. */
++SAM_API void sam_tts_set_rate_pitch_f(sam_speech *t, double sapi_rate, double semitones);
++/* ClassicVoices patch: echo tail after the text in ms, faded out (-1 = upstream's full second). */
++SAM_API void sam_tts_set_fx_tail(sam_speech *t, int ms);
++/* ClassicVoices patch: override the voice's base pitch in Hz (the SAPI 4 RoboSoft voices); reloads. */
++SAM_API int sam_tts_set_base_pitch(sam_speech *t, double hz);
++
+ /* One of the SAPI 4 voice modes: "none", "hall", "stadium", "space", "room", "whisper",
+  * "robosoft1".."robosoft6", "robot", "monotone". Whisper and the monotone RoboSofts also change the
+  * synthesis (noise excitation / flat pitch), so this reloads the voice. Returns 0, or -1 for an
+@@ -89,6 +97,20 @@ SAM_API int sam_tts_speak(sam_speech *t, const char *utf8, int flags, const sam_
+ /* thread-safe: stop the current speak as soon as possible (within one audio chunk) */
+ SAM_API void sam_tts_cancel(sam_speech *t);
+ 
++/* ClassicVoices patch (singing mode for the SAPI 5 voices): sing utf8 instead of speaking it. literal = 0: plain
++ * text gets an automatic melody (one note per syllable, sam.h sam_tts_sing_text); literal = 1: the text is a
++ * score ("word NOTE BEATS ...", "- BEATS", "tempo N") and *mismatches (may be NULL) counts words whose notes and
++ * syllables disagree. The rate set above scales the tempo of the automatic melody, the pitch transposes it; cfg
++ * (NULL = none) adds vibrato and a transposition. Cancel, volume and the voice's effect work as for speaking.
++ * Returns 0, 1 when cancelled / stopped, -1 on error. No events are delivered. */
++typedef struct {
++    float vibrato_cents; /* depth in cents (0 = none) */
++    float vibrato_rate;  /* Hz (0 = 5.5) */
++    double transpose;    /* semitones */
++} sam_sing_cfg;
++SAM_API int sam_tts_sing_speech(sam_speech *t, const char *utf8, int literal, const sam_sing_cfg *cfg,
++                                const sam_callbacks *cb, int *mismatches);
++
+ /* 22050, or whatever the loaded voice runs at */
+ SAM_API int sam_tts_sample_rate(const sam_speech *t);
+ 

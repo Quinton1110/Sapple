@@ -1,0 +1,93 @@
+Sapple - notices
+================
+
+This project's own code
+-----------------------
+
+Copyright (c) 2026 Quinton Williams.
+
+No licence has been chosen for this project's own code yet. All rights reserved pending licence decision.
+
+"This project's own code" means everything in this repository that is not listed under "Third-party components"
+below: the app (App/), the extension (Extension/), the shared Swift and C bridges (Shared/), the SAPI 4 x86
+interpreter (SAPI4/), the tests (Tests/, Engine/test/), the tools (tools/), the patches to the vendored engines
+(Engine/patches/, and the changes they describe inside Engine/), the build files and the documentation.
+
+
+Third-party components
+----------------------
+
+Each vendored engine is a copy of the library sources of its upstream project at a pinned commit, with this
+project's patches applied (Engine/patches/). The upstream licence files are kept next to the code.
+
+1. Engine/sam - Microsoft SAPI 5 engine (Sam, Mike, Mary), reconstructed in C
+   Upstream: https://github.com/KamiKitsune420/ms-sam-mike-mary-decomp
+   Pinned:   558ed18d144d83ea831f958116fcf1942075ad75
+   Licence:  MIT, Copyright (c) 2026 KamiKitsune420 (Engine/sam/LICENSE)
+   Patches:  Engine/patches/classicvoices-engine.patch
+
+2. Engine/anna - Microsoft Anna (Windows Vista / 7, SAPI 5.3 "TTS20" engine), reconstructed in C
+   Upstream: https://github.com/KamiKitsune420/ms-ana-decomp
+   Pinned:   a8da0464124fb1ba1a67b0056524bafa4cff4d0d
+   Licence:  MIT, Copyright (c) 2026 KamiKitsune420 (Engine/anna/LICENSE)
+   Patches:  Engine/patches/anna-engine.patch
+
+3. Engine/onecore - Microsoft OneCore engine (David, Zira, Mark, Hazel, George, Susan), reconstructed in C
+   Upstream: https://github.com/KamiKitsune420/ms-david-zira-decomp
+   Pinned:   3009a84894fdb37e1f808469cc97ab25006096e1
+   Licence:  MIT, Copyright (c) 2026 KamiKitsune420 (Engine/onecore/LICENSE)
+   Patches:  Engine/patches/onecore-engine.patch (includes this project's additions: the neural back end used by Eva
+             and Sarah, eva_*.c / eva_*.h, and the en-GB locale support)
+
+4. Engine/opentv - OpenTV, the L&H / Centigram TruVoice engine decompiled to C
+   Upstream: https://github.com/RetroBunn/tv-decomp
+   Pinned:   b8897650b9e0dde14f95f67db3937e97858baa41
+   Licence:  MIT, Copyright (c) 2026 RetroBunn (Engine/opentv/LICENSE)
+   Upstream notice kept: Engine/opentv/NOTICE. It records that the engine's data tables are Centigram's and are
+             NOT covered by the MIT licence. Those tables are not in this repository (see "Voice data" below).
+             The same notice credits a technique and constants in src/engine/frame.c to TGSpeechBox by Tamas Geczy
+             (https://github.com/tgeczy/TGSpeechBox, MIT, Copyright (c) 2014 NV Access Limited,
+             Copyright (c) 2025-2026 Tamas Geczy); no TGSpeechBox code is copied.
+   Patches:  Engine/patches/opentv-engine.patch
+
+5. Engine/sapi4 - sapi4-decomp, Microsoft's SAPI 4 engine (msttssyn.dll, 1999) decompiled to C
+   Upstream: sapi4-decomp, a separate project by the author of this project (not published)
+   Pinned:   ecc002fdfd45812d49126d07e56816a4061c367d
+   Licence:  NONE. The upstream project has no licence file, and none is added here. Unmodified.
+
+Referenced, not copied: the TruVoice speaker names follow https://github.com/devinprater/iTruVoice (MIT).
+
+Build-time only, not vendored: XcodeGen (to generate the Xcode project) and, for one optional Mac test of the SAPI 4
+interpreter, the Unicorn CPU emulator library.
+
+
+Constant tables inside the vendored engines
+-------------------------------------------
+
+Some files in Engine/sam, Engine/anna and Engine/onecore are constant tables that their upstream projects generated
+from the original Windows engine DLLs (for example the abbreviation, lexicon, part-of-speech and character-class
+tables, and codec and vocoder constants). They are part of the upstream projects' published sources and are
+included here exactly as the upstream projects distribute them. The MIT licences above are the upstream authors'
+licences; this project makes no claim that those licences cover material that originates in Microsoft's binaries.
+
+
+Voice data, engine binaries and SDKs: NOT included, NOT licensed by this project
+--------------------------------------------------------------------------------
+
+The voices themselves are not part of this repository. The voice data, original engine files and SDK libraries
+belong to their respective owners, are not included here, and are not licensed by this project. Nothing in this
+project grants any right to them. Each user must supply their own legitimately obtained copies.
+
+- Microsoft SAPI 5 voices Sam, Mike and Mary, and their lexicons: Microsoft Corporation.
+- Microsoft SAPI 4 engine msttssyn.dll and its voice files: Microsoft Corporation.
+- Microsoft Anna voice data: Microsoft Corporation.
+- Microsoft OneCore voices and language data (David, Zira, Mark, Hazel, George, Susan, Eva, Sarah): Microsoft
+  Corporation.
+- Windows 11 natural voices (Jenny, Aria, Guy, Sonia, Ryan), the key their models are encrypted with, and the
+  Microsoft Speech SDK embedded libraries: Microsoft Corporation.
+- L&H TruVoice engine and its data tables: originally Copyright (c) 1991-1997 Centigram Communications Corp.; the
+  technology passed to Lernout & Hauspie Speech Products (1997), then to ScanSoft (2001), which became Nuance
+  Communications (2005). Where the rights sit today has not been established (see Engine/opentv/NOTICE).
+
+Microsoft and Windows are trademarks of Microsoft Corporation. This project is not affiliated with, endorsed by
+or sponsored by Microsoft, Nuance or any other owner named here.

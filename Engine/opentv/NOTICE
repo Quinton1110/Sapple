@@ -1,0 +1,113 @@
+OpenTV — notice on the engine data
+==================================
+
+The code in this repository is OpenTV's own work and is MIT licensed; see
+LICENSE.
+
+The data under `data/` is not.
+
+What it is
+----------
+
+`data/en/engine.tvdata` holds the constant tables the American English
+TruVoice engine reads: its letter-to-sound rules, its exception dictionary
+and suffix tables, the phoneme inventory and the per-phoneme formant,
+duration and amplitude tables, the prosody and duration-by-rate tables, and
+the parameters that define the ten voices. About 760 KB of it.
+
+It is lifted byte for byte out of Centigram's CGRM_EN.DLL by
+`tools/extract_data.py`, because the engine's arithmetic depends on the
+exact values — the decompilation is verified by producing audio identical to
+the original's down to the sample, and that is only meaningful against the
+original's own numbers. The tables carry their symbol names from this
+project's analysis, but the bytes are Centigram's.
+
+No code is taken. The `.text` section is not copied, apart from fifty-one
+jump tables the compiler left sitting between functions, each cut to the
+size a C declaration in `src/` gives it. The engine's logic in `src/` is
+written from analysis, not lifted.
+
+Whose work it is
+----------------
+
+The data is the work of Centigram Communications Corporation, whose
+copyright notice the binaries carry as "Copyright (c) 1991-1997 Centigram
+Communications Corp."
+
+Where the rights sit now has not been established by this project, and the
+trail is not short. What is on the public record:
+
+* June 1997 -- Centigram sold the TruVoice text-to-speech technology and
+  business to Lernout & Hauspie Speech Products of Belgium, months before
+  the October 1997 build this project works from was even linked.
+* October 2001 -- Lernout & Hauspie went bankrupt after the accounting
+  fraud uncovered in 2000, and ScanSoft bought the bulk of its assets at
+  auction, the text-to-speech and speech-recognition engines among them.
+* 2005 -- ScanSoft acquired Nuance Communications and took its name.
+
+Nuance's own later history is not traced here.
+
+The MIT licence does not cover the contents of `data/`, and OpenTV is in no
+position to license them to anyone. They are included so that the engine
+can be built and studied without hunting down a 1997 DLL, and for no other
+reason.
+
+If you hold these rights and would rather the data were not distributed
+here, please open an issue on the repository and it will be removed.
+
+Borrowed from TGSpeechBox
+-------------------------
+
+The rate-adaptive bandwidth widening in `src/engine/frame.c` -- the idea
+that formant bandwidths should widen as the speech rate climbs, so a
+resonator settles inside a shortened phoneme instead of ringing on into the
+next one -- is taken from TGSpeechBox by Tamas Geczy, along with its
+threshold and 1.3x widening factor:
+
+    https://github.com/tgeczy/TGSpeechBox
+
+TGSpeechBox is MIT licensed:
+
+    Copyright (c) 2014 NV Access Limited
+    Copyright (c) 2025-2026 Tamas Geczy
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the
+    "Software"), to deal in the Software without restriction, including
+    without limitation the rights to use, copy, modify, merge, publish,
+    distribute, sublicense, and/or sell copies of the Software, and to
+    permit persons to whom the Software is furnished to do so, subject to
+    the following conditions:
+
+    The above copyright notice and this permission notice shall be included
+    in all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+    OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+    IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+    TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+    SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+No TGSpeechBox code is copied here.  It is a C++ engine with a different
+frame model; what crossed over is the technique and the constants, written
+against TruVoice's own resonator tables.  TGSpeechBox is itself a fork of
+NV Access's NV Speech Player, which is why NV Access holds the earlier
+copyright above.
+
+The original binaries
+---------------------
+
+No Centigram binary is in this repository, and none is needed to build or
+run OpenTV.
+
+A copy is needed for one thing only: `tools/difftest.py`, which runs the
+corpus through the original DLL and through OpenTV and requires the audio to
+be identical. That comparison is the evidence the decompilation is correct.
+Without a copy the test reports that it has nothing to compare against and
+everything else still works.
+
+`tools/extract_data.py` is how `data/` was produced, and is kept in the tree
+so that anyone with the original can check that what is committed here is
+what comes out of it.

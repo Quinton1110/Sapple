@@ -1,0 +1,3064 @@
+--- a/src/eva_crf.c
++++ b/Engine/onecore/eva_crf.c
+@@ -0,0 +1,632 @@
++/* eva_crf.c - Eva's CRF prosody models (BR2 breaks, TON boundary tones, ACL pitch accents).  See eva_crf.h and
++ * notes/eva_prosody.md.  [S] = transcribed from the decompile, [G] = inferred. */
++#include "eva_crf.h"
++#include "zf2_int.h"
++#include "eva_nn.h"
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++const char *zf1_pos_name(unsigned pos);   /* zf1_post.c: POS table object vt+8 (names) */
++int zf1_pos_class(unsigned pos);           /*             vt+0x10 (classes) */
++
++static uint32_t rd32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
++static uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
++
++/* ------------------------------------------------------------------ CVocabTrie (Loc FUN_18001160c layout,
++ * reverse lookup FUN_180005e80 = depth-first rank of the terminal nodes; walk as tools/vocabtrie.py) */
++typedef struct { const uint8_t *b; long T1, T3, T4, NODES, T7, T8, ROOT; } Trie;
++static void trie_init(Trie *t, const uint8_t *b, long off) {
++#define H(k) rd16(b + off + 2 * (k))
++#define U(k) rd32(b + off + 2 * (k))
++    long p = off + 0x30;
++    t->b = b; t->T1 = p;
++    p += 2 * H(6); p += (p & 2); /* T2 */
++    p += 2 * H(7); p += (p & 2); t->T3 = p;
++    p += 2 * H(8); p += (p & 2); t->T4 = p;
++    p += 2 * H(9); p += (p & 2); t->NODES = p;
++    p += 4 * (long)U(0xe);       /* T6 */
++    t->T7 = p + 4 * (long)U(0x10);
++    t->T8 = t->T7 + 4 * (long)U(0x12);
++    t->ROOT = off + (long)U(0x14);
++#undef H
++#undef U
++}
++static unsigned tdec(const Trie *t, long T, long *pp) {
++    long p = *pp; unsigned v = t->b[p], acc = 0; int i = 0; unsigned th = rd16(t->b + T);
++    while (th <= v) { acc += th; i++; v = ((v - th) * 256 + t->b[p + i]) & 0xFFFF; th = rd16(t->b + T + 2 * i); }
++    *pp = p + i + 1;
++    return (acc + v) & 0xFFFF;
++}
++/* node: char, flags, and (flag 4) the number of words below it (the skip count of the reverse lookup
++ * FUN_180005e80) */
++static void tnode(const Trie *t, long *pp, unsigned *c, unsigned *f, unsigned *val) {
++    unsigned idx = tdec(t, t->T1, pp);
++    *c = rd16(t->b + t->NODES + 4 * idx); *f = rd16(t->b + t->NODES + 4 * idx + 2);
++    *val = 0;
++    if (*f & 4) {
++        const uint8_t *q = t->b + *pp; unsigned b0 = q[0];
++        if (b0 >= 0xc0) { *val = (((unsigned)q[1] & 0x7f) | ((b0 & 0x3f) << 7)) << 8 | q[2]; *pp += 3; }
++        else if (b0 >= 0x80) { *val = (b0 & 0x7f) << 8 | q[1]; *pp += 2; }
++        else { *val = b0; *pp += 1; }
++    }
++}
++static long tchild(const Trie *t, unsigned f, long p12, long f0) {
++    unsigned k = f & 0x1c0;
++    if (k == 0) return f0;
++    if (k == 0x40) return p12;
++    if (k == 0x80) { long q = p12; unsigned idx = tdec(t, t->T3, &q); return t->ROOT + (long)rd32(t->b + t->T7 + 4 * idx); }
++    if (k == 0x100) return t->ROOT + ((long)t->b[p12] << 16 | (long)t->b[p12 + 1] << 8 | t->b[p12 + 2]);
++    return -1;
++}
++static char *cv_strdup(const char *a) { size_t n = strlen(a) + 1; char *r = malloc(n); if (r) memcpy(r, a, n); return r; }
++static int put_utf8(char *o, unsigned c) {
++    if (c < 0x80) { o[0] = (char)c; return 1; }
++    if (c < 0x800) { o[0] = (char)(0xc0 | c >> 6); o[1] = (char)(0x80 | (c & 0x3f)); return 2; }
++    o[0] = (char)(0xe0 | c >> 12); o[1] = (char)(0x80 | ((c >> 6) & 0x3f)); o[2] = (char)(0x80 | (c & 0x3f)); return 3;
++}
++/* iterate the sibling list at base (transliteration of the matcher, tools/vocabtrie.py level()) */
++typedef int (*sib_fn)(void *ctx, unsigned c, unsigned f, unsigned val, long child);
++static int tsiblings(const Trie *t, long base, sib_fn fn, void *ctx) {
++    unsigned c, f, val; long p = base, p12, p11, f0 = -1, q;
++    if (base < 0) return 0;
++    tnode(t, &p, &c, &f, &val);
++    p12 = p;
++    unsigned k = f & 0x1d0;
++    if (k == 0x10) { q = p; unsigned idx = tdec(t, t->T4, &q); f0 = q + (long)rd32(t->b + t->T8 + 4 * idx); p = q; }
++    else if (k == 0x90) { q = p; tdec(t, t->T3, &q); p = q; }
++    else if (k == 0x110) p += 3;
++    p11 = p;
++    for (;;) {
++        int r = fn(ctx, c, f, val, tchild(t, f, p12, f0));
++        if (r) return r;
++        if (f & 2) { if (!(f & 0x200)) return 0; f0 = -1; }
++        tnode(t, &p11, &c, &f, &val);
++        p12 = p11;
++        long p4 = f0;
++        k = f & 0x1d0;
++        if (k == 0x10) { q = p12; unsigned idx = tdec(t, t->T4, &q); if (f0 < 0) f0 = q; p11 = q; p4 = f0 + (long)rd32(t->b + t->T8 + 4 * idx); }
++        else if (k == 0x50) p4 = p12;
++        else if (k == 0x90) { q = p12; tdec(t, t->T3, &q); p11 = q; }
++        else if (k == 0x110) p11 = p12 + 3;
++        f0 = p4;
++    }
++}
++
++/* string -> feature id = depth-first rank of its terminal node (a node's own word before the words below it) */
++typedef struct { const uint16_t *s; int n, e; long rank; long next; int found; unsigned f; } Look;
++static int look_fn(void *ctx, unsigned c, unsigned f, unsigned val, long child) {
++    Look *L = (Look *)ctx;
++    if (c == L->s[L->e]) { L->found = 1; L->f = f; L->next = child; return 1; }
++    L->rank += (long)(f & 1) + (long)val;
++    return 0;
++}
++static long trie_rank(const Trie *t, const uint16_t *s, int n) {
++    Look L; long base = t->ROOT;
++    memset(&L, 0, sizeof L); L.s = s; L.n = n;
++    if (n <= 0) return -1;
++    for (L.e = 0; L.e < n; L.e++) {
++        L.found = 0;
++        tsiblings(t, base, look_fn, &L);
++        if (!L.found) return -1;
++        if (L.e == n - 1) return (L.f & 1) ? L.rank : -1;
++        L.rank += L.f & 1;
++        if (!(L.f & 0x10) || L.next < 0) return -1;
++        base = L.next;
++    }
++    return -1;
++}
++
++/* depth-first enumeration (self-check: every word's rank must equal its position) */
++typedef struct { const Trie *t; uint16_t buf[1024]; int len; long count, bad; } Dump;
++static int dump_fn(void *ctx, unsigned c, unsigned f, unsigned val, long child);
++static void tdump(Dump *D, long base, int depth) {
++    if (depth > 400 || D->len >= 1023) return;
++    struct { Dump *D; int depth; } x = {D, depth};
++    (void)x;
++    tsiblings(D->t, base, dump_fn, D);
++}
++static int dump_fn(void *ctx, unsigned c, unsigned f, unsigned val, long child) {
++    Dump *D = (Dump *)ctx;
++    (void)val;
++    D->buf[D->len++] = (uint16_t)c;
++    if (f & 1) { if (trie_rank(D->t, D->buf, D->len) != D->count) D->bad++; D->count++; }
++    if ((f & 0x10) && child >= 0 && D->len < 1023) tdump(D, child, 0);
++    D->len--;
++    return 0;
++}
++
++/* ------------------------------------------------------------------ model */
++struct EvaCrf {
++    uint8_t *file; long size; size_t maplen;
++    int nlabel, ntempl, nfeat;
++    char **label, **templ;
++    Trie trie;
++    const float *w;       /* nfeat x nlabel */
++    const float *x;       /* nlabel x nlabel transitions */
++    float costf;
++    int acl_boundary;     /* the ACL extractor spells out-of-range positions "Boundary" (its vocabulary has no "_B") */
++    int nsuf; char **suf; /* RegularText suffix classes ("-tion", ...) found in the BR2 vocabulary [G] */
++};
++
++static char *wdup(const uint8_t *p, const uint8_t *end) {
++    size_t n = 0; while (p + 2 * n + 1 < end && rd16(p + 2 * n)) n++;
++    char *s = malloc(3 * n + 1); int o = 0;
++    for (size_t i = 0; i < n; i++) o += put_utf8(s + o, rd16(p + 2 * i));
++    s[o] = 0;
++    return s;
++}
++
++EvaCrf *eva_crf_load(const char *path, char *err, int errlen) {
++    EvaCrf *m = calloc(1, sizeof *m);
++    if (!m) return NULL;
++    m->file = eva_map_file(path, &m->size, &m->maplen);
++    if (!m->file) { snprintf(err, errlen, "cannot read %s", path); free(m); return NULL; }
++    const uint8_t *d = m->file, *end = d + m->size;
++    /* FUN_180033c80: 0x18-byte container header (magic, GUID, size), u16 LCID, u16, "CRF\0", u32 version,
++     * then 8 u32: strings off/size, nLabels, nTemplates, trie size, weight size, transition size, cost factor */
++    if (m->size < 0x60 || memcmp(d + 0x1c, "CRF", 3)) { eva_crf_free(m); snprintf(err, errlen, "%s: not a CRF model", path); return NULL; }
++    long p = 0x24;
++    uint32_t stroff = rd32(d + p), strsize = rd32(d + p + 4);
++    m->nlabel = (int)rd32(d + p + 8); m->ntempl = (int)rd32(d + p + 12);
++    uint32_t triesz = rd32(d + p + 16), wsz = rd32(d + p + 20), xsz = rd32(d + p + 24);
++    memcpy(&m->costf, d + p + 28, 4);
++    p += 32;
++    if ((long)stroff + (long)strsize > m->size || m->nlabel < 1 || m->nlabel > 64 || m->ntempl < 1 || m->ntempl > 256) { eva_crf_free(m); snprintf(err, errlen, "bad CRF header"); return NULL; }
++    m->label = calloc((size_t)m->nlabel, sizeof(char *));
++    m->templ = calloc((size_t)m->ntempl, sizeof(char *));
++    for (int i = 0; i < m->nlabel; i++, p += 4) m->label[i] = wdup(d + stroff + rd32(d + p), end);
++    for (int i = 0; i < m->ntempl; i++, p += 4) m->templ[i] = wdup(d + stroff + rd32(d + p), end);
++    trie_init(&m->trie, d, p);
++    m->nfeat = (int)(wsz / 4 / (uint32_t)m->nlabel);
++    m->acl_boundary = !memcmp(d, "ACL", 3);
++    /* RegularText suffix classes: the "U01:-xxx" entries (the only feature strings starting that way) */
++    {
++        static const char *const SUF[] = {"able", "age", "ance", "ancy", "ant", "cal", "crat", "dom", "ed", "ee",
++            "eer", "en", "ence", "ency", "ent", "ese", "ess", "est", "ful", "hood", "ify", "ile", "ine", "ing", "ise",
++            "ish", "ism", "ist", "ive", "ize", "less", "let", "like", "lity", "logy", "ment", "ness", "ous", "rian",
++            "ship", "some", "stic", "tion", "ure"};
++        for (size_t i = 0; i < sizeof SUF / sizeof *SUF; i++) {
++            char key[32]; snprintf(key, sizeof key, "U01:-%s", SUF[i]);
++            if (eva_crf_lookup(m, key) >= 0) {
++                m->suf = realloc(m->suf, sizeof(char *) * (size_t)(m->nsuf + 1));
++                m->suf[m->nsuf++] = cv_strdup(SUF[i]);
++            }
++        }
++    }
++    p += triesz;
++    m->w = (const float *)(d + p); p += wsz;
++    m->x = (const float *)(d + p); p += xsz;
++    if ((long)wsz != 4L * m->nfeat * m->nlabel || (long)xsz != 4L * m->nlabel * m->nlabel || p > m->size
++        || (uint32_t)(m->nlabel * m->nlabel) > 4096) {
++        snprintf(err, errlen, "%s: %d features x %d labels does not match weight size %u", path, m->nfeat, m->nlabel, wsz);
++        eva_crf_free(m); return NULL;
++    }
++    return m;
++}
++
++void eva_crf_free(EvaCrf *m) {
++    if (!m) return;
++    for (int i = 0; m->label && i < m->nlabel; i++) free(m->label[i]);
++    for (int i = 0; m->templ && i < m->ntempl; i++) free(m->templ[i]);
++    for (int i = 0; i < m->nsuf; i++) free(m->suf[i]);
++    free(m->suf);
++    free(m->label); free(m->templ); eva_unmap_file(m->file, m->maplen); free(m);
++}
++int eva_crf_nlabels(const EvaCrf *m) { return m->nlabel; }
++const char *eva_crf_label(const EvaCrf *m, int i) { return m->label[i]; }
++int eva_crf_ntemplates(const EvaCrf *m) { return m->ntempl; }
++const char *eva_crf_template(const EvaCrf *m, int i) { return m->templ[i]; }
++int eva_crf_nfeatures(const EvaCrf *m) { return m->nfeat; }
++int eva_crf_lookup(const EvaCrf *m, const char *s) {
++    uint16_t w[1024]; int n = 0;
++    const unsigned char *u = (const unsigned char *)s;
++    while (*u && n < 1023) {   /* UTF-8 -> UTF-16 (feature strings are ASCII apart from rare word text) */
++        unsigned c = *u++;
++        if (c >= 0xe0 && u[0] && u[1]) { c = (c & 15) << 12 | (u[0] & 63u) << 6 | (u[1] & 63u); u += 2; }
++        else if (c >= 0xc0 && u[0]) { c = (c & 31) << 6 | (u[0] & 63u); u += 1; }
++        w[n++] = (uint16_t)c;
++    }
++    long r = trie_rank(&m->trie, w, n);
++    return r >= 0 && r < m->nfeat ? (int)r : -1;
++}
++
++long eva_crf_selfcheck(const EvaCrf *m, long *count) {
++    Dump *D = calloc(1, sizeof *D);
++    long bad;
++    D->t = &m->trie;
++    tdump(D, m->trie.ROOT, 0);
++    *count = D->count; bad = D->bad;
++    free(D);
++    return bad;
++}
++
++/* Viterbi [G on tie-breaking and summation order; CRF++ semantics: node = costf * sum of unigram weights,
++ * edge = transition x[prev][cur]] */
++void eva_crf_decode(const EvaCrf *m, const int *feats, int T, int *labels) {
++    int L = m->nlabel, K = m->ntempl;
++    if (T <= 0) return;
++    float *node = calloc((size_t)T * L, sizeof(float)), *best = calloc((size_t)T * L, sizeof(float));
++    int *bp = calloc((size_t)T * L, sizeof(int));
++    for (int t = 0; t < T; t++)
++        for (int y = 0; y < L; y++) {
++            float s = 0.0f;
++            for (int k = 0; k < K; k++) { int f = feats[t * K + k]; if (f >= 0) s = s + m->w[(size_t)f * L + y]; }
++            node[t * L + y] = m->costf * s;
++        }
++    for (int y = 0; y < L; y++) best[y] = node[y];
++    for (int t = 1; t < T; t++)
++        for (int y = 0; y < L; y++) {
++            int arg = 0; float bv = 0.0f;
++            for (int q = 0; q < L; q++) {
++                float v = best[(t - 1) * L + q] + m->x[q * L + y];
++                if (q == 0 || v > bv) { bv = v; arg = q; }
++            }
++            best[t * L + y] = bv + node[t * L + y];
++            bp[t * L + y] = arg;
++        }
++    int y = 0;
++    for (int q = 1; q < L; q++) if (best[(T - 1) * L + q] > best[(T - 1) * L + y]) y = q;
++    for (int t = T - 1; t >= 0; t--) { labels[t] = y; if (t) y = bp[t * L + y]; }
++    free(node); free(best); free(bp);
++}
++
++/* ------------------------------------------------------------------ features on the zf2 sentence */
++typedef struct { const Z2Sent *s; int *tok; int ntok; int *tokof; const EvaCrf *m; } Seq;   /* tokof[word] = token index or -1 */
++
++static int is_tok(const Z2W *w) { return z2_is_rw(w); }   /* FUN_18001c490 + FUN_180030418 [S] */
++static int is_word04(const Z2W *w) { return w->type == 0 || w->type == 4; }
++
++static void lower_utf8(const zf_char *t, char *o, int cap, int up) {
++    int n = 0;
++    for (; t && *t && n + 4 < cap; t++) {
++        unsigned c = *t;
++        if (!up && c >= 'A' && c <= 'Z') c += 32;
++        if (up && c >= 'a' && c <= 'z') c -= 32;
++        n += put_utf8(o + n, c);
++    }
++    o[n] = 0;
++}
++
++/* navigation result */
++typedef struct { int level; int i; int oob; } Pos;   /* level 0 word, 1 phrase, 2 IP, 3 sentence; oob = _B offset */
++enum { LV_WORD, LV_PHRASE, LV_IP, LV_SENT };
++
++static int ph_is_break(const Z2Sent *s, int i) { return z2_phrase_is_break(s, i); }
++static int rw_between(const Z2Sent *s, int a, int b) { int n = 0; for (int k = a; k <= b; k++) if (z2_is_rw(&s->w[k])) n++; return n; }
++
++/* engine word navigation skips words failing FUN_18001a070 (punctuation, breaks, empty words) [S via zf2] */
++static int word_move(const Z2Sent *s, int i, int dir) {
++    for (i += dir; i >= 0 && i < s->nw; i += dir) if (!z2_word_skip(&s->w[i])) return i;
++    return -1;
++}
++static int phrase_move(const Z2Sent *s, int i, int dir) {
++    for (i += dir; i >= 0 && i < s->nph; i += dir) if (!ph_is_break(s, i)) return i;
++    return -1;
++}
++
++static int ip_of_phrase(const Z2Sent *s, int ph) { return ph >= 0 ? s->ph[ph].ip : -1; }
++
++/* property -> string; returns 0 ok, -1 null */
++static int word_prop(const Seq *q, int wi, const char *prop, char *out, int cap) {
++    const Z2Sent *s = q->s; const Z2W *w = &s->w[wi];
++    if (!strcmp(prop, "RegularText") || !strcmp(prop, "Text")) {
++        /* Text = word+0x98, RegularText = word+0xb8 [S]; how the frontend fills +0xb8 is not traced:
++         * lower-case text [G] (the model's vocabulary is lower case; Word.Text values keep capitals) */
++        lower_utf8(w->text, out, cap, 0);
++        if (prop[0] == 'R' && q->m && q->m->nsuf) {
++            /* [G] words outside the model's word list back off to a suffix class ("-tion"), as the vocabulary
++             * suggests; the frontend code that fills word+0xb8 has not been traced */
++            char key[600]; snprintf(key, sizeof key, "U01:%s", out);
++            if (eva_crf_lookup(q->m, key) < 0) {
++                size_t n = strlen(out); int best = -1; size_t bl = 0;
++                for (int k = 0; k < q->m->nsuf; k++) {
++                    size_t l = strlen(q->m->suf[k]);
++                    if (l < n && l > bl && !strcmp(out + n - l, q->m->suf[k])) { best = k; bl = l; }
++                }
++                if (best >= 0) snprintf(out, cap, "-%s", q->m->suf[best]);
++            }
++        }
++        if (!strcmp(prop, "Text") && w->text) { int n = 0; for (const zf_char *t = w->text; *t && n + 4 < cap; t++) n += put_utf8(out + n, *t); out[n] = 0; }
++        return out[0] ? 0 : -1;
++    }
++    if (!strcmp(prop, "CaseInsensitiveText")) { lower_utf8(w->text, out, cap, 1); return out[0] ? 0 : -1; }
++    if (!strcmp(prop, "POS")) { snprintf(out, cap, "%s", zf1_pos_name(w->pos)); return 0; }
++    if (!strcmp(prop, "POSTaggerPOS")) { snprintf(out, cap, "%s", zf1_pos_name(w->tpos)); return 0; }
++    int v = 0;
++    if (!strcmp(prop, "BoundedSyllableNumber")) v = w->ns < 5 ? w->ns : 5;                  /* FUN_180151cf0 */
++    else if (!strcmp(prop, "BreakIndex")) v = w->bi;
++    else if (!strcmp(prop, "SyllableNumber")) v = w->ns;
++    else if (!strcmp(prop, "NumOfWordsToPunc") || !strcmp(prop, "BoundedNumOfWordsToPunc")) {   /* FUN_180153fa0 / FUN_1801520f0 */
++        int cap8 = prop[0] == 'B';
++        for (int k = wi + 1; k < s->nw && s->w[k].type != 1; k++) {
++            if (is_word04(&s->w[k])) v++;
++            if (cap8 && v > 8) { v = 8; break; }
++        }
++    } else if (!strcmp(prop, "NumOfWordsFromPunc") || !strcmp(prop, "BoundedNumOfWordsFromPunc")) {  /* FUN_180153ef0 / FUN_180151ee0 */
++        int cap8 = prop[0] == 'B';
++        for (int k = wi; k >= 0 && s->w[k].type != 1; k--) {
++            if (is_word04(&s->w[k])) v++;
++            if (cap8 && v > 8) { v = 8; break; }
++        }
++    } else if (!strcmp(prop, "BoundedNumOfSyllablesToPunc")) {   /* FUN_180151e10 */
++        for (int k = wi + 1; k < s->nw && s->w[k].type != 1; k++) {
++            if (is_word04(&s->w[k])) v += s->w[k].ns;
++            if (v > 15) { v = 15; break; }
++        }
++    } else if (!strcmp(prop, "BoundedNumOfSyllablesFromPunc")) { /* FUN_180151d40 */
++        for (int k = wi; k >= 0 && s->w[k].type != 1; k--) {
++            if (is_word04(&s->w[k])) v += s->w[k].ns;
++            if (v > 15) { v = 15; break; }
++        }
++    } else if (!strcmp(prop, "BoundedNumOfWordsToVerb") || !strcmp(prop, "BoundedNumOfWordsFromVerb")) {
++        /* FUN_1801521b0 / FUN_180151fa0: POS class 2 (verbs) or 6 (auxiliaries) stops; runs off the end -> 8 */
++        int to = prop[16] == 'T', k = to ? wi + 1 : wi, found = 0;
++        v = 8;
++        int cnt = 0;
++        for (; k >= 0 && k < s->nw; k += to ? 1 : -1) {
++            int c = zf1_pos_class(s->w[k].pos);
++            if (c == 2 || c == 6) { found = 1; break; }
++            if (is_word04(&s->w[k])) cnt++;
++            if (cnt > 8) break;
++        }
++        if (found) v = cnt;
++    } else if (!strcmp(prop, "IsFollowedByPunc")) {             /* FUN_180152c70 */
++        int k = wi + 1;
++        for (; k < s->nw; k++) {
++            const Z2W *x = &s->w[k];
++            if (!z2_is_break(x) && (x->type == 1 || z2_is_rw(x))) break;
++        }
++        v = (k < s->nw && s->w[k].type != 1) ? 0 : 1;
++    } else if (!strcmp(prop, "IsLastContentWordInPhrase")) {    /* FUN_180152ef0: POS classes 1,2,3,7,9 */
++        if (w->phrase < 0) return -1;
++        for (int k = s->ph[w->phrase].w1; k >= s->ph[w->phrase].w0; k--) {
++            int c = zf1_pos_class(s->w[k].pos);
++            if (c < 10 && ((0x28e >> c) & 1)) { v = k == wi; break; }
++        }
++    } else if (!strcmp(prop, "FwPosInIntonationPhrase") || !strcmp(prop, "BwPosInIntonationPhrase")) {
++        int ip = ip_of_phrase(s, w->phrase);
++        if (ip < 0) return -1;
++        int a = s->ph[s->ip[ip].ph0].w0, b = s->ph[s->ip[ip].ph1].w1;
++        v = prop[0] == 'F' ? rw_between(s, a, wi) : rw_between(s, wi, b);
++    } else return -1;
++    snprintf(out, cap, "%d", v);
++    return 0;
++}
++
++static int phrase_prop(const Z2Sent *s, int pi, const char *prop, char *out, int cap) {
++    const Z2PH *p = &s->ph[pi];
++    int v = 0;
++    if (!strcmp(prop, "WordNumber")) v = rw_between(s, p->w0, p->w1);
++    else if (!strcmp(prop, "SyllableNumber")) { for (int k = p->w0; k <= p->w1; k++) if (z2_is_rw(&s->w[k])) v += s->w[k].ns; }
++    else if (!strcmp(prop, "ToBIFinalBoundaryTone")) v = z2_is_rw(&s->w[p->w1]) ? s->w[p->w1].tone : 0;
++    else if (!strcmp(prop, "FwPosInIntonationPhrase") || !strcmp(prop, "BwPosInIntonationPhrase")) {
++        int ip = p->ip; if (ip < 0) return -1;
++        int a = s->ip[ip].ph0, b = s->ip[ip].ph1;
++        if (prop[0] == 'F') { for (int k = a; k <= pi; k++) if (!ph_is_break(s, k)) v++; }
++        else { for (int k = pi; k <= b; k++) if (!ph_is_break(s, k)) v++; }
++    } else return -1;
++    snprintf(out, cap, "%d", v);
++    return 0;
++}
++
++/* evaluate one attribute path ("Word.PrevWord.POS.SmallerThan(2)") for token word wi */
++static void eval_attr(const Seq *q, int wi, const char *path, char *out, int cap) {
++    const Z2Sent *s = q->s;
++    char tok[64][256]; int nt = 0;
++    /* split on '.' outside parentheses/quotes */
++    { const char *a = path; int depth = 0, inq = 0, n = 0;
++      for (; *a && nt < 64; a++) {
++          if (*a == '"') inq = !inq;
++          if (!inq && *a == '(') depth++;
++          if (!inq && *a == ')') depth--;
++          if (*a == '.' && !depth && !inq) { tok[nt][n] = 0; nt++; n = 0; continue; }
++          if (n < 255) tok[nt][n++] = *a;
++      }
++      tok[nt][n] = 0; nt++; }
++    Pos x = {LV_WORD, wi, 0};
++    int k = 1;                    /* tok[0] == "Word" */
++    for (; k < nt; k++) {
++        const char *t = tok[k];
++        if (!strcmp(t, "PrevWord") || !strcmp(t, "NextWord")) {
++            int dir = t[0] == 'P' ? -1 : 1;
++            if (x.oob) { x.oob += dir; continue; }
++            int j = word_move(s, x.i, dir);
++            if (j < 0) x.oob = dir; else x.i = j;
++        } else if (!strcmp(t, "Phrase")) {
++            if (x.oob) break;
++            x.level = LV_PHRASE; x.i = s->w[x.i].phrase; if (x.i < 0) { snprintf(out, cap, "-1"); return; }
++        } else if (!strcmp(t, "PrevPhrase") || !strcmp(t, "NextPhrase")) {
++            int dir = t[0] == 'P' ? -1 : 1;
++            if (x.oob) { x.oob += dir; continue; }
++            int j = phrase_move(s, x.i, dir);
++            if (j < 0) x.oob = dir; else x.i = j;
++        } else if (!strcmp(t, "IntonationPhrase")) {
++            if (!x.oob) { x.level = LV_IP; x.i = ip_of_phrase(s, x.i); }
++        } else if (!strcmp(t, "Sentence")) {
++            x.level = LV_SENT; x.oob = 0;
++        } else break;             /* property */
++    }
++    if (x.oob && x.level != LV_SENT) {
++        int hasfn = 0;
++        for (int j = k + 1; j < nt; j++) if (strchr(tok[j], '(')) hasfn = 1;
++        if (hasfn) { snprintf(out, cap, "-1"); return; }                    /* vocabulary: "0/-1/-1" */
++        if (q->m && q->m->acl_boundary) { snprintf(out, cap, "Boundary"); return; }
++        /* FUN_180004ea0: "_B-2".."_B+2" (table 0x180074020) */
++        int o = x.oob < -2 ? -2 : x.oob > 2 ? 2 : x.oob;
++        snprintf(out, cap, "_B%s%d", o < 0 ? "-" : "+", o < 0 ? -o : o);
++        return;
++    }
++    if (k >= nt) { out[0] = 0; return; }
++    const char *prop = tok[k];
++    char val[512]; int ok;
++    if (x.level == LV_SENT) {
++        if (!strcmp(prop, "SentenceType")) { snprintf(val, sizeof val, "%d", s->type); ok = 0; } else ok = -1;
++    } else if (x.level == LV_PHRASE) ok = phrase_prop(s, x.i, prop, val, sizeof val);
++    else if (x.level == LV_WORD) ok = word_prop(q, x.i, prop, val, sizeof val);
++    else ok = -1;
++    /* post-functions */
++    for (k++; k < nt; k++) {
++        const char *f = tok[k];
++        if (!strncmp(f, "SmallerThan(", 12)) {
++            if (ok) { snprintf(val, sizeof val, "-1"); ok = 0; continue; }
++            snprintf(val, sizeof val, "%d", atoi(val) < atoi(f + 12) ? 1 : 0);
++        } else if (!strncmp(f, "IsInList(", 9) || !strncmp(f, "EndWith(", 8)) {
++            if (ok) { snprintf(val, sizeof val, "-1"); ok = 0; continue; }
++            int hit = 0; const char *a = strchr(f, '(') + 1;
++            while (*a) {
++                const char *b = strchr(a, '"'); if (!b) break;
++                const char *e = strchr(b + 1, '"'); if (!e) break;
++                size_t n = (size_t)(e - b - 1), vl = strlen(val);
++                if (f[0] == 'I') { if (n == vl && !strncmp(val, b + 1, n)) hit = 1; }
++                else if (vl >= n && !strncmp(val + vl - n, b + 1, n)) hit = 1;
++                a = e + 1;
++            }
++            snprintf(val, sizeof val, "%d", hit);
++        } else if (!strncmp(f, "Equal(", 6)) {
++            /* [G] the TON vocabulary for "NextWord.POSTaggerPOS.Equal(32)" holds POS names, so the value passes through */
++        }
++    }
++    if (ok) { out[0] = 0; return; }
++    snprintf(out, cap, "%s", val);
++}
++
++static int *build_feats(const EvaCrf *m, const Seq *q) {
++    int K = m->ntempl;
++    int *f = malloc(sizeof(int) * (size_t)(q->ntok ? q->ntok : 1) * (size_t)K);
++    char key[4096], part[1024];
++    for (int t = 0; t < q->ntok; t++)
++        for (int k = 0; k < K; k++) {
++            const char *tp = m->templ[k];
++            f[t * K + k] = -1;
++            if (tp[0] != 'U') continue;                  /* "B" = the transition matrix */
++            const char *colon = strchr(tp, ':');
++            if (!colon) continue;
++            int n = (int)(colon - tp) + 1;
++            memcpy(key, tp, (size_t)n); key[n] = 0;
++            /* split the attribute list on '/' outside parentheses and quotes */
++            const char *a = colon + 1; int depth = 0, inq = 0, pl = 0, empty = 0, first = 1;
++            char attr[1024];
++            for (;; a++) {
++                if (*a == '"') inq = !inq;
++                if (!inq && *a == '(') depth++;
++                if (!inq && *a == ')') depth--;
++                if (!*a || (*a == '/' && !depth && !inq)) {
++                    attr[pl] = 0;
++                    eval_attr(q, q->tok[t], attr, part, sizeof part);
++                    if (!part[0]) empty = 1;
++                    if (!first) strcat(key, "/");
++                    strncat(key, part, sizeof key - strlen(key) - 1);
++                    first = 0; pl = 0;
++                    if (!*a) break;
++                    continue;
++                }
++                if (pl < 1023) attr[pl++] = *a;
++            }
++            if (!empty) f[t * K + k] = eva_crf_lookup(m, key);
++        }
++    return f;
++}
++
++static void seq_init(Seq *q, const Z2Sent *s) {
++    q->s = s; q->ntok = 0;
++    q->tok = malloc(sizeof(int) * (size_t)(s->nw + 1));
++    q->tokof = malloc(sizeof(int) * (size_t)(s->nw + 1));
++    for (int i = 0; i < s->nw; i++) { q->tokof[i] = -1; if (is_tok(&s->w[i])) { q->tokof[i] = q->ntok; q->tok[q->ntok++] = i; } }
++}
++static void seq_free(Seq *q) { free(q->tok); free(q->tokof); }
++
++static void word_name(const Z2W *w, char *o, int cap) { int n = 0; for (const zf_char *t = w->text; t && *t && n + 4 < cap; t++) n += put_utf8(o + n, *t); o[n] = 0; }
++
++/* accent setter = word vt+0x138 as the rules use it (zf2_prosody.c rule_accents) */
++static void set_accent(Z2Sent *s, int i, int v, int force) {
++    Z2W *w = &s->w[i];
++    if (w->i230 == 0 || force) {
++        w->i22c = v;
++        for (int k = 0; k < w->ns; k++) s->s[w->s0 + k].tobi = 0;
++        z2_set_tobi_accent(s, i);
++    }
++    w->i230 = 1;
++}
++
++#ifdef CV_NO_DEBUG_ENV
++#define VERB(P) 0      /* the shipped extension never prints spoken words */
++#else
++#define VERB(P) ((P)->verbose)
++#endif
++static void dump_words(const Z2Sent *s, const char *tag) {
++
++    char nm[256];
++    fprintf(stderr, "%s:", tag);
++    for (int i = 0; i < s->nw; i++) {
++        const Z2W *w = &s->w[i];
++        if (!z2_is_rw(w)) continue;
++        word_name(w, nm, sizeof nm);
++        fprintf(stderr, " %s[BI%d%s%s]", nm, w->bi, w->tone ? (w->tone == 1000 ? " T1000" : w->tone == 1001 ? " T1001" : w->tone == 1002 ? " T1002" : w->tone == 1003 ? " T1003" : w->tone == 1004 ? " T1004" : w->tone == 1005 ? " T1005" : " T?") : "",
++                w->i22c ? (w->i22c == 1 ? " A1" : w->i22c == 5 ? " A5" : w->i22c == 6 ? " A6" : " A?") : "");
++    }
++    fprintf(stderr, "\n");
++}
++
++void eva_prosody_hook(void *ctx, void *z2, int stage) {
++    EvaProsody *P = (EvaProsody *)ctx;
++    Z2Sent *s = (Z2Sent *)z2;
++    EvaCrf *m = P->off ? NULL : stage == 1 ? P->br2 : stage == 2 ? P->ton : P->acl;
++    if (!m) {
++        if (stage == 3 && VERB(P)) dump_words(s, "rules ");
++        return;
++    }
++    if (stage >= 2) z2_build_phrases(s, 1);   /* break predictor post step: loc vt+0x30 phrase build [S]; the p2=1 form
++                                                 (punctuation outside phrases) matches the vocabulary [G] */
++    if (stage == 2)   /* [G] words ending a phrase carry the neutral tone 1000 before TON runs (the ACL vocabulary never
++                       * sees a phrase tone below 1000); the site that sets it is not traced */
++        for (int i = 0; i < s->nw; i++) if (z2_is_rw(&s->w[i]) && s->w[i].bi > 2 && s->w[i].tone == 0 && !s->w[i].tone_lock) s->w[i].tone = 1000;
++    Seq q; seq_init(&q, s); q.m = m;
++    if (!q.ntok) { seq_free(&q); return; }
++    int *feats = build_feats(m, &q), *lab = malloc(sizeof(int) * (size_t)q.ntok);
++    eva_crf_decode(m, feats, q.ntok, lab);
++    char nm[256];
++    for (int t = 0; t < q.ntok; t++) {
++        int i = q.tok[t]; Z2W *w = &s->w[i];
++        if (stage == 1) {
++            /* CCRFBreakTaggerImpl FUN_18002fe90: label "#n" -> BI n+1; only unlocked words whose BI is 2 or 3;
++             * BI 3 also sets pause class 1 (IntermPhrase), BI 4 would set 3 [S] */
++            int bi = atoi(m->label[lab[t]] + 1) + 1;
++            if (!w->bi_lock && w->bi > 1 && w->bi < 4) {
++                w->bi = bi;
++                if (bi == 3) w->pause = Z2_PC_INTERM;
++                else if (bi == 4) w->pause = Z2_PC_NONPUNCIP;
++            }
++        } else if (stage == 2) {
++            /* CCRFBoundaryToneTaggerImpl FUN_18005c2b0: only words with BI > 2 whose tone is 1000 or 1002;
++             * label index -> {0, 1000, ..., 1006} (0x180088968) [S] */
++            static const int code[8] = {0, 1000, 1001, 1002, 1003, 1004, 1005, 1006};
++            if (w->bi > 2 && (w->tone == 1000 || w->tone == 0x3ea) && lab[t] < 8 && !w->tone_lock) w->tone = code[lab[t]];
++        }
++        if (VERB(P)) { word_name(w, nm, sizeof nm); fprintf(stderr, "  %s %-14s %s\n", stage == 1 ? "BR2" : stage == 2 ? "TON" : "ACL", nm, m->label[lab[t]]); }
++    }
++    if (stage == 3) {
++        /* CCRFPitchAccentLocTaggerImpl FUN_180067360: accented words get 1 or 5 (first accent of the first phrase:
++         * 5, or 1 in sentence type 2) / 1 (first of a later phrase) / 6 (others); then FUN_180067590 turns every
++         * 5 after the first into 1 [S] */
++        int first = 1, firstphr = 1, nphr = 0;
++        for (int t = 0; t < q.ntok; t++) {
++            int i = q.tok[t];
++            if (lab[t] != 0) {
++                int v = 6;
++                if (first) {
++                    if (firstphr && nphr == 0) { v = s->type == 2 ? 1 : 5; firstphr = 0; }
++                    else v = 1;
++                    first = 0;
++                }
++                set_accent(s, i, v, 0);
++            }
++            if (s->w[i].bi > 3) { nphr++; first = 1; }
++        }
++        int seen5 = 0;
++        for (int i = 0; i < s->nw; i++)
++            if (s->w[i].i22c == 5) { if (!seen5) seen5 = 1; else set_accent(s, i, 1, 1); }
++    }
++    if (stage == 3 && VERB(P)) dump_words(s, "models");
++    free(feats); free(lab); seq_free(&q);
++}
+--- a/src/eva_crf.h
++++ b/Engine/onecore/eva_crf.h
+@@ -0,0 +1,45 @@
++/* eva_crf.h - Eva's statistical prosody models (M1033Eva.BR2 / .TON / .ACL): CRF model loader and decoder.
++ *
++ * Format and semantics from MSTTSLoc_OneCore.dll (Windows 11 26100.1742 copy), see notes/eva_prosody.md:
++ *   CCRFModelManager parse FUN_180033c80 (header, labels, templates FUN_18000b550, CVocabTrie FUN_180055440,
++ *   weights, transition matrix), feature strings FUN_180004ea0, taggers CCRFBreakTaggerImpl (FUN_18002fe90),
++ *   CCRFBoundaryToneTaggerImpl (FUN_18005c2b0), CCRFPitchAccentLocTaggerImpl (FUN_180067360 + FUN_180067590). */
++#ifndef EVA_CRF_H
++#define EVA_CRF_H
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++typedef struct EvaCrf EvaCrf;
++
++/* Load one CRF model file.  NULL on error (message in err). */
++EvaCrf *eva_crf_load(const char *path, char *err, int errlen);
++void eva_crf_free(EvaCrf *m);
++int eva_crf_nlabels(const EvaCrf *m);
++const char *eva_crf_label(const EvaCrf *m, int i);
++int eva_crf_ntemplates(const EvaCrf *m);
++const char *eva_crf_template(const EvaCrf *m, int i);   /* "U05:Word.PrevWord.RegularText/..." (ASCII) */
++int eva_crf_nfeatures(const EvaCrf *m);
++/* feature string ("U01:state") -> feature id, or -1 */
++int eva_crf_lookup(const EvaCrf *m, const char *s);
++/* Viterbi over T tokens: feats[t*ntempl + k] = feature id of template k at token t (-1 = none);
++ * labels[t] receives the best label index. */
++void eva_crf_decode(const EvaCrf *m, const int *feats, int T, int *labels);
++/* self-check of the feature dictionary: every word's rank equals its depth-first position; returns the mismatches */
++long eva_crf_selfcheck(const EvaCrf *m, long *count);
++
++/* ---- the three taggers, applied to a zf2 sentence (Z2Sent, see zf2_int.h) ---- */
++typedef struct {
++    EvaCrf *br2, *ton, *acl;
++    int verbose;           /* print the per-word labels to stderr (not in CV_NO_DEBUG_ENV builds) */
++    int off;               /* debug: models off, the rules decide (A/B) */
++} EvaProsody;
++/* stage 1 = after the break rules, 2 = after the boundary-tone rules, 3 = after the pitch-accent rules */
++void eva_prosody_hook(void *ctx, void *z2sent, int stage);
++
++#ifdef __cplusplus
++}
++#endif
++#endif
+--- a/src/eva_nn.c
++++ b/Engine/onecore/eva_nn.c
+@@ -0,0 +1,306 @@
++/* eva_nn.c - Eva's acoustic network (M1033Eva.TDAT), reconstructed from MSTTSEngine_OneCore.dll 10.3.21207.
++ * Function addresses are VAs in that DLL (image base 0x180000000).  See notes/eva_dnn.md.
++ * Keep -ffp-contract=off: every float statement below mirrors one SSE scalar instruction sequence. */
++#include "eva_nn.h"
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <math.h>
++#if defined(__APPLE__) || defined(__unix__)
++#define EVA_MMAP 1   /* ClassicVoices: like zf1_dat.c (ZF1_DAT_MMAP), map the data read-only */
++#endif
++#ifdef EVA_MMAP
++#include <sys/mman.h>
++#include <unistd.h>
++#endif
++
++uint8_t *eva_map_file(const char *path, long *size, size_t *maplen) {
++    FILE *f = fopen(path, "rb");
++    uint8_t *p;
++    long n;
++    *maplen = 0;
++    if (!f) return NULL;
++    fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET);
++    if (n <= 0) { fclose(f); return NULL; }
++#ifdef EVA_MMAP
++    {
++        void *m = mmap(NULL, (size_t)n, PROT_READ, MAP_PRIVATE, fileno(f), 0);
++        if (m != MAP_FAILED) { fclose(f); *size = n; *maplen = (size_t)n; return (uint8_t *)m; }
++    }
++#endif
++    p = malloc((size_t)n);
++    if (!p || fread(p, 1, (size_t)n, f) != (size_t)n) { free(p); fclose(f); return NULL; }
++    fclose(f);
++    *size = n;
++    return p;
++}
++
++void eva_unmap_file(uint8_t *p, size_t maplen) {
++    if (!p) return;
++#ifdef EVA_MMAP
++    if (maplen) { munmap(p, maplen); return; }
++#endif
++    (void)maplen;
++    free(p);
++}
++
++static uint32_t rd32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
++static uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
++static float rdf(const uint8_t *p) { float f; uint32_t u = rd32(p); memcpy(&f, &u, 4); return f; }
++static int pad64(int n) { return (n + 63) & ~63; }
++static void *zalloc(size_t n) { void *p = calloc(1, n ? n : 1); return p; }
++
++/* ---- MLPLinearTransform ---- */
++
++/* SSE3Int8Impl init FUN_180127050 (base FUN_180126d14) */
++static int lin_init(EvaLin *L, int type, const uint8_t *W, int stride, const uint8_t *bias, int in, int out,
++                    const uint8_t *rowscale) {
++    memset(L, 0, sizeof *L);
++    L->type = type; L->in = in; L->out = out; L->inpad = pad64(in); L->stride = stride;
++    if (type == EVA_LIN_INT16) {     /* Sarah addition: CSSE3Int16Impl init FUN_180126ddc; weight scale set by the caller (wscale) */
++        L->W16 = (const int16_t *)W;
++        L->bias = (W != bias) ? (const float *)bias : NULL;   /* +0x42: bias only when its offset differs */
++        L->q16 = zalloc(sizeof(int16_t) * (size_t)L->inpad);
++        return L->q16 ? 0 : -1;
++    }
++    if (type == EVA_LIN_INT8) {
++        L->W = (const int8_t *)W; L->rowscale = (const float *)rowscale; L->bias = (const float *)bias;
++        L->q = zalloc((size_t)L->inpad);
++        return L->q ? 0 : -1;
++    }
++    if (type == EVA_LIN_SCALING) {   /* CScaling init FUN_180127000: W = per-dim scale, "bias" = offset */
++        L->scale = (const float *)W; L->bias = (const float *)bias;
++        return 0;
++    }
++    return -1;                       /* float / int16 layers do not occur in Eva */
++}
++
++/* x86 scalar semantics used by the engine */
++static float sse_max(float a, float b) { return a > b ? a : b; }   /* maxss a,b */
++static float sse_min(float a, float b) { return a < b ? a : b; }   /* minss a,b */
++
++/* SSE3Int8Impl forward FUN_180052810 (batch 1).  Dynamic symmetric int8 quantisation of the input:
++ *   FUN_18005295c: m = max(max x, |min x|) (maxss/minss chain, then comiss), range = 4*m
++ *   q[i] = (int8)((int)(x[i] * (127.5/range) + 128.5) + 0x80)          (cvttss2si, byte add)
++ *   FUN_1800529cc: s_j = sum_i q[i]*W[j][i] over inpad columns, exact int32 (punpcklbw/psraw/pmaddwd), cvtdq2ps
++ *   y_j = rowscale_j * s_j; y_j = (range/127.5) * y_j; y_j = bias_j + y_j */
++static void lin8_fwd(const EvaLin *L, const float *x, float *y) {
++    float mx = x[0], mn = x[0];
++    for (int i = 1; i < L->in; i++) { mx = sse_max(mx, x[i]); mn = sse_min(mn, x[i]); }
++    float am = fabsf(mn);
++    float m = (mx > am) ? mx : am;
++    float range = m * 4.0f;
++    float inv = 127.5f / range;
++    float deq = range / 127.5f;
++    for (int i = 0; i < L->in; i++) {
++        float v = inv * x[i];
++        v = v + 128.5f;
++        int t = (int)v;                              /* cvttss2si */
++        L->q[i] = (int8_t)(uint8_t)((unsigned)t + 0x80u);
++    }
++    for (int j = 0; j < L->out; j++) {
++        const int8_t *w = L->W + (size_t)j * L->stride;
++        int32_t s = 0;
++        for (int i = 0; i < L->inpad; i++) s += (int32_t)L->q[i] * (int32_t)w[i];
++        y[j] = (float)s;
++    }
++    for (int j = 0; j < L->out; j++) y[j] = L->rowscale[2 * j] * y[j];
++    for (int j = 0; j < L->out; j++) y[j] = deq * y[j];
++    for (int j = 0; j < L->out; j++) y[j] = L->bias[j] + y[j];
++}
++
++/* Sarah addition: CSSE3Int16Impl forward FUN_180126200 (batch rows are quantised one by one, so batching changes nothing) [S]; the dot
++ * product FUN_1801273a4 [V disasm]: pmaddwd + paddd over pad64(in) columns of the zero-padded input, four int32 lanes
++ * summed at the end - an exact int32 sum with wrap-around (FUN_180125580 / FUN_180127340 is the NEON class, a stub on x64):
++ *   FUN_180135884: m = max(max x, |min x|), range = 8*m;  FUN_180124c30: inv = 32767.5/range, deq = range/32767.5
++ *   FUN_1801358f4: q[i] = (int16)((int)(x[i]*inv + 32768.5) - 0x8000)
++ *   y_j = (float)sum_i q[i]*W[j][i];  y_j = wdeq*y_j (wdeq = w*(1/32767.5), w = header +0x24);  y_j = deq*y_j;
++ *   y_j = bias_j + y_j when the layer has a bias (+0x42) */
++static void lin16_fwd(const EvaLin *L, const float *x, float *y) {
++    float mx = x[0], mn = x[0];
++    for (int i = 1; i < L->in; i++) { if (mx <= x[i]) mx = x[i]; if (x[i] <= mn) mn = x[i]; }
++    float am = fabsf(mn);
++    if (mx <= am) mx = am;
++    float range = mx * 8.0f;
++    float inv = 32767.5f / range, deq = range / 32767.5f;
++    for (int i = 0; i < L->in; i++) {
++        float v = x[i] * inv;
++        v = v + 32768.5f;
++        L->q16[i] = (int16_t)(uint16_t)((unsigned)(int)v - 0x8000u);
++    }
++    for (int j = 0; j < L->out; j++) {
++        const int16_t *w = (const int16_t *)((const uint8_t *)L->W16 + (size_t)j * L->stride);
++        uint32_t s = 0;                                   /* paddd wraps */
++        for (int i = 0; i < L->in; i++) s += (uint32_t)((int32_t)L->q16[i] * (int32_t)w[i]);
++        y[j] = (float)(int32_t)s;
++    }
++    for (int j = 0; j < L->out; j++) y[j] = L->wdeq * y[j];
++    for (int j = 0; j < L->out; j++) y[j] = deq * y[j];
++    if (L->bias) for (int j = 0; j < L->out; j++) y[j] = L->bias[j] + y[j];
++}
++
++/* CScaling forward FUN_1800718d0: y = x*scale + bias */
++static void lin_scale_fwd(const EvaLin *L, const float *x, float *y) {
++    for (int j = 0; j < L->out; j++) { float t = x[j] * L->scale[j]; y[j] = t + L->bias[j]; }
++}
++
++static void lin_fwd(const EvaLin *L, const float *x, float *y) {
++    if (L->type == EVA_LIN_INT8) lin8_fwd(L, x, y);
++    else if (L->type == EVA_LIN_INT16) lin16_fwd(L, x, y);   /* Sarah */
++    else lin_scale_fwd(L, x, y);
++}
++
++/* ---- MLPNonLinearTransform: CSigmoidImpl FUN_18006fcc0 / FUN_180135d70, CHyperbolicTangentImpl FUN_180135bd0 /
++ * FUN_180135b54.  Both call the CRT (expf, tanhf): 1/(expf(-x)+1).  [bit-exact caveat: UCRT expf/tanhf] ---- */
++static float sigm(float x) { float e = expf(-x); return 1.0f / (e + 1.0f); }
++static void act_fwd(int act, float *y, int n) {
++    if (act == EVA_ACT_SIGMOID) for (int i = 0; i < n; i++) y[i] = sigm(y[i]);
++    else if (act == EVA_ACT_TANH) for (int i = 0; i < n; i++) y[i] = tanhf(y[i]);
++}
++
++/* ---- layers ---- */
++
++/* CMLPDNNLayer init FUN_1801239a0.  Header (0x28 bytes, data offsets relative to header+0x28):
++ *   +0 in, +4 out, +8 activation, +0xc linear type, +0x10 weight row stride, +0x14 weights, +0x18 bias,
++ *   +0x1c alignment, +0x20 row scales (8-byte records), +0x24 float (unused by the int8 path) */
++static int dnn_init(EvaLayer *l, const uint8_t *h) {
++    const uint8_t *d = h + 0x28;
++    l->kind = 0; l->in = (int)rd32(h); l->out = (int)rd32(h + 4); l->act = (int)rd32(h + 8);
++    int lt = (int)rd32(h + 0xc), stride = (int)rd16(h + 0x10);
++    if (l->act != EVA_ACT_NOOP && l->act != EVA_ACT_SIGMOID && l->act != EVA_ACT_TANH) return -1;
++    if (lin_init(&l->lin, lt, d + rd32(h + 0x14), stride, d + rd32(h + 0x18), l->in, l->out, d + rd32(h + 0x20)))
++        return -1;
++    if (lt == EVA_LIN_INT16) {   /* FUN_180126ddc: pf[1] = w * 3.0518044e-5f (0x38000080 = 1/32767.5) */
++        float w = rdf(h + 0x24);
++        l->lin.wdeq = w * 3.05180438e-5f;
++    }
++    l->y = zalloc(sizeof(float) * (size_t)pad64(l->out));
++    return l->y ? 0 : -1;
++}
++
++/* CMLPLSTMSVDLayer init FUN_180123e80 -> FUN_180123ae0, weights FUN_1801240c0 (U, V) + FUN_1801241e0 (projection).
++ * Header u32 fields (offsets relative to the header): +0 in, +4 out, +8 0x101, +0xc u16 align, +0xe u16 SVD rank,
++ * +0x10 u16 cell, +0x12 u16 projection linear type, +0x14 u16 gate linear type, +0x18 f32 c0, +0x1c f32 h0,
++ * +0x28 proj rowscales, +0x30 V rowscales, +0x38 U rowscales, +0x40 gate bias, +0x4c V weights, +0x50 U weights,
++ * +0x54 u16 U stride, +0x56 u16 V stride, +0x58 proj weights, +0x5c u16 proj stride (0 = no projection),
++ * +0x60 peephole i (nonzero = 4 gates; 0 = coupled input/forget), +0x64 peephole f, +0x68 peephole o */
++static int lstm_init(EvaLayer *l, const uint8_t *h) {
++    l->kind = 1; l->in = (int)rd32(h); l->out = (int)rd32(h + 4);
++    l->rank = rd16(h + 0xe); l->cell = rd16(h + 0x10);
++    int ptype = rd16(h + 0x12), gtype = rd16(h + 0x14);
++    l->c0 = rdf(h + 0x18); l->h0 = rdf(h + 0x1c);
++    if (rd32(h + 0x60) == 0 || rd16(h + 0x5c) == 0) return -1;   /* only the 4-gate projected variant is ported */
++    l->catpad = pad64(l->in + l->out); l->rankpad = pad64(l->rank);
++    int ng = 4 * l->cell;
++    float *zeros = zalloc(sizeof(float) * (size_t)ng);          /* param_1[5]: zero bias for U and P */
++    if (!zeros) return -1;
++    if (lin_init(&l->U, gtype, h + rd32(h + 0x50), rd16(h + 0x54), (const uint8_t *)zeros, l->catpad, l->rank,
++                 h + rd32(h + 0x38))) return -1;
++    if (lin_init(&l->V, gtype, h + rd32(h + 0x4c), rd16(h + 0x56), h + rd32(h + 0x40), l->rankpad, ng,
++                 h + rd32(h + 0x30))) return -1;
++    if (lin_init(&l->P, ptype, h + rd32(h + 0x58), rd16(h + 0x5c), (const uint8_t *)zeros, l->cell, l->out,
++                 h + rd32(h + 0x28))) return -1;
++    l->peep_i = (const float *)(h + rd32(h + 0x60));
++    l->peep_f = (const float *)(h + rd32(h + 0x64));
++    l->peep_o = (const float *)(h + rd32(h + 0x68));
++    size_t C = (size_t)l->cell;
++    l->c = zalloc(4 * C); l->h = zalloc(4 * (size_t)l->out); l->cat = zalloc(4 * (size_t)l->catpad);
++    l->urank = zalloc(4 * (size_t)l->rankpad); l->gates = zalloc(4 * (size_t)ng); l->tmp = zalloc(4 * C);
++    l->ig = zalloc(4 * C); l->fg = zalloc(4 * C); l->og = zalloc(4 * C); l->cnew = zalloc(4 * C); l->m = zalloc(4 * C);
++    l->y = zalloc(4 * (size_t)pad64(l->out));
++    return (l->c && l->h && l->cat && l->urank && l->gates && l->tmp && l->ig && l->fg && l->og && l->cnew && l->m && l->y)
++        ? 0 : -1;
++}
++
++/* LSTM slot 2 FUN_1801243c0 */
++static void lstm_reset(EvaLayer *l) {
++    for (int j = 0; j < l->cell; j++) l->c[j] = l->c0;
++    for (int j = 0; j < l->out; j++) l->h[j] = l->h0;
++}
++
++/* LSTM step FUN_180123760: slot 14 FUN_180124300 (SVD gates), FUN_180124550 (i, f), FUN_18012442c (c),
++ * FUN_180083814 (o, m, projection), then c_prev = c_new, h_prev = y.
++ * Gate blocks in the V output: [0,C) input (peephole +0x60), [C,2C) forget (+0x64), [2C,3C) cell, [3C,4C) output (+0x68). */
++static void lstm_fwd(EvaLayer *l, const float *x) {
++    int C = l->cell;
++    memcpy(l->cat, x, sizeof(float) * (size_t)l->in);
++    memcpy(l->cat + l->in, l->h, sizeof(float) * (size_t)l->out);
++    lin_fwd(&l->U, l->cat, l->urank);
++    lin_fwd(&l->V, l->urank, l->gates);
++    /* FUN_180124550 (4-gate branch, flag +0xd3 set) */
++    for (int j = 0; j < C; j++) l->tmp[j] = l->c[j] * l->peep_f[j];
++    for (int j = 0; j < C; j++) l->tmp[j] = l->gates[C + j] + l->tmp[j];
++    for (int j = 0; j < C; j++) l->fg[j] = sigm(l->tmp[j]);                 /* -> +0x78 */
++    for (int j = 0; j < C; j++) l->tmp[j] = l->c[j] * l->peep_i[j];
++    for (int j = 0; j < C; j++) l->tmp[j] = l->gates[j] + l->tmp[j];
++    for (int j = 0; j < C; j++) l->ig[j] = sigm(l->tmp[j]);                 /* -> +0x70 */
++    /* FUN_18012442c */
++    for (int j = 0; j < C; j++) l->tmp[j] = l->fg[j] * l->c[j];
++    for (int j = 0; j < C; j++) l->gates[2 * C + j] = tanhf(l->gates[2 * C + j]);
++    for (int j = 0; j < C; j++) l->gates[2 * C + j] = l->ig[j] * l->gates[2 * C + j];
++    for (int j = 0; j < C; j++) l->cnew[j] = l->tmp[j] + l->gates[2 * C + j];
++    /* FUN_180083814 */
++    for (int j = 0; j < C; j++) l->tmp[j] = l->cnew[j] * l->peep_o[j];
++    for (int j = 0; j < C; j++) l->tmp[j] = l->gates[3 * C + j] + l->tmp[j];
++    for (int j = 0; j < C; j++) l->og[j] = sigm(l->tmp[j]);                 /* -> +0x88 */
++    for (int j = 0; j < C; j++) l->tmp[j] = tanhf(l->cnew[j]);
++    for (int j = 0; j < C; j++) l->m[j] = l->og[j] * l->tmp[j];             /* -> +0xa0 */
++    lin_fwd(&l->P, l->m, l->y);
++    memcpy(l->c, l->cnew, sizeof(float) * (size_t)C);
++    memcpy(l->h, l->y, sizeof(float) * (size_t)l->out);
++}
++
++/* ---- file ---- */
++
++/* TDAT (FUN_180124b18, FUN_1801249e4 / FUN_180124854 version 3):
++ *   +0x00 GUID(16), +0x10 u32 version (3), +0x14 u32 offset of {u32 in, u32 out}, +0x18 u32 offset of the layer
++ *   table {u32 n; u32 off[n]} (layer offsets relative to the table), +0x1c optional (0) */
++EvaNet *eva_net_load(const char *path, char *err, int errlen) {
++    EvaNet *n = zalloc(sizeof *n);
++    if (!n) return NULL;
++    n->file = eva_map_file(path, &n->size, &n->maplen);
++    if (!n->file) { snprintf(err, errlen, "cannot read %s", path); free(n); return NULL; }
++    const uint8_t *d = n->file;
++    if (n->size < 0x30 || rd32(d + 0x10) != 3) { eva_net_free(n); snprintf(err, errlen, "not a version-3 TDAT"); return NULL; }
++    n->in = (int)rd32(d + rd32(d + 0x14)); n->out = (int)rd32(d + rd32(d + 0x14) + 4);
++    uint32_t t = rd32(d + 0x18);
++    n->nlayers = (int)rd32(d + t);
++    n->L = zalloc(sizeof(EvaLayer) * (size_t)n->nlayers);
++    for (int i = 0; i < n->nlayers; i++) {
++        uint32_t o = t + rd32(d + t + 4 + 4 * i);
++        if (o + 0x70 > (uint32_t)n->size) { snprintf(err, errlen, "layer %d out of range", i); eva_net_free(n); return NULL; }
++        uint32_t type = rd32(d + o + 8);
++        int r = type < 0xff ? dnn_init(&n->L[i], d + o) : type == 0x101 ? lstm_init(&n->L[i], d + o) : -1;
++        if (r) { snprintf(err, errlen, "layer %d (type %#x) unsupported", i, type); eva_net_free(n); return NULL; }
++    }
++    eva_net_reset(n);
++    return n;
++}
++
++void eva_net_reset(EvaNet *n) {
++    for (int i = 0; i < n->nlayers; i++) if (n->L[i].kind == 1) lstm_reset(&n->L[i]);
++}
++
++const float *eva_net_forward(EvaNet *n, const float *x) {
++    const float *cur = x;
++    for (int i = 0; i < n->nlayers; i++) {
++        EvaLayer *l = &n->L[i];
++        if (l->kind == 0) { lin_fwd(&l->lin, cur, l->y); act_fwd(l->act, l->y, l->out); }
++        else lstm_fwd(l, cur);
++        cur = l->y;
++    }
++    return cur;
++}
++
++static void lin_free(EvaLin *L) { free(L->q); free(L->q16); }
++void eva_net_free(EvaNet *n) {
++    if (!n) return;
++    for (int i = 0; n->L && i < n->nlayers; i++) {
++        EvaLayer *l = &n->L[i];
++        lin_free(&l->lin); lin_free(&l->U); lin_free(&l->V); lin_free(&l->P);
++        if (l->kind == 1) free((void *)l->U.bias);
++        free(l->c); free(l->h); free(l->cat); free(l->urank); free(l->gates); free(l->tmp); free(l->ig); free(l->fg);
++        free(l->og); free(l->cnew); free(l->m); free(l->y);
++    }
++    free(n->L); eva_unmap_file(n->file, n->maplen); free(n);
++}
+--- a/src/eva_nn.h
++++ b/Engine/onecore/eva_nn.h
+@@ -0,0 +1,79 @@
++/* eva_nn.h - Microsoft Eva (OneCore neural voice) acoustic network: TDAT loader and forward pass.
++ *
++ * Reconstructed from MSTTSEngine_OneCore.dll 10.3.21207 (x64).  See notes/eva_dnn.md for the file format and the
++ * engine functions each piece comes from.  Portable C99; keep -ffp-contract=off (bit-exact goal).
++ *
++ * The network is a CMLP: a list of layers run in order on one input row (batch size 1, PredictorBatchSize=1):
++ *   DNN layer   (CMLPDNNLayer, type < 0xff):  y = act(Lin(x))        Lin = int8 (SSE3Int8Impl) or scaling (CScaling)
++ *   LSTM layer  (CMLPLSTMSVDLayer, type 0x101): projected LSTM with peepholes, gate matrix factored as V*U (SVD)
++ * Eva's M1033Eva.TDAT:  631 -Lin8-> 80 -Lin8,sigmoid-> 512 -LSTMP(cell 512, proj 128, rank 168)-> 128
++ *                        -LSTMP(rank 56)-> 128 -LSTMP(rank 64)-> 128 -Lin8-> 508 -Scaling(std, mean)-> 508
++ */
++#ifndef EVA_NN_H
++#define EVA_NN_H
++
++#include <stddef.h>
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* MLPLinearTransform::* chosen by FUN_180124f00 from the layer's linear type */
++enum { EVA_LIN_FLOAT = 1, EVA_LIN_INT16 = 2, EVA_LIN_SCALING = 3, EVA_LIN_INT8 = 4 };
++/* MLPNonLinearTransform::* chosen by FUN_1801359a4 */
++enum { EVA_ACT_NOOP = 1, EVA_ACT_SIGMOID = 2, EVA_ACT_TANH = 3, EVA_ACT_SOFTMAX = 4, EVA_ACT_RELU = 5 };
++
++typedef struct {
++    int type;              /* EVA_LIN_* */
++    int in, out;           /* logical sizes */
++    int inpad;             /* (in + 63) & ~63: the int8 dot products run over this many columns */
++    int stride;            /* bytes per weight row (int8) / unused for scaling */
++    const int8_t *W;       /* int8: out rows of `stride` bytes */
++    const float *rowscale; /* int8: per output row, 8-byte records {float scale; float unused} */
++    const float *bias;     /* out floats (int8: added after scaling; scaling: the offset) */
++    const float *scale;    /* scaling: out floats */
++    int8_t *q;             /* int8: quantized input scratch, inpad bytes, zero padded */
++    const int16_t *W16;    /* int16 (Sarah): out rows of `stride` bytes; bias NULL when the layer has none */
++    float wdeq;            /* int16: weight scale (header +0x24) / 32767.5 */
++    int16_t *q16;          /* int16: quantized input scratch */
++} EvaLin;
++
++typedef struct {
++    int kind;              /* 0 = DNN, 1 = LSTM (SVD) */
++    int in, out;
++    /* DNN */
++    EvaLin lin;
++    int act;
++    /* LSTM (SVD): gates = V(U([x ; h_prev])) + bias; cell 512, 4 gate blocks [i f g o] */
++    int cell, rank, rankpad, catpad;
++    EvaLin U, V, P;        /* U: catpad -> rank, V: rankpad -> 4*cell (+bias), P: cell -> out (projection) */
++    const float *peep_i, *peep_f, *peep_o; /* header offsets 0x60, 0x64, 0x68 */
++    float c0, h0;          /* initial state (header 0x18 / 0x1c; 0.1 in Eva) */
++    float *c, *h, *cat, *urank, *gates, *tmp, *ig, *fg, *og, *cnew, *m;
++    float *y;              /* output buffer (out, padded) */
++} EvaLayer;
++
++typedef struct {
++    uint8_t *file; long size; size_t maplen;
++    int in, out, nlayers;
++    EvaLayer *L;
++} EvaNet;
++
++/* Read a whole data file: mapped read-only on Apple / Unix systems (like zf1_dat.c), else malloc'ed.
++ * *maplen != 0 means mapped.  Release with eva_unmap_file. */
++uint8_t *eva_map_file(const char *path, long *size, size_t *maplen);
++void eva_unmap_file(uint8_t *p, size_t maplen);
++
++/* Load M1033Eva.TDAT.  Returns NULL on error (err gets a message). */
++EvaNet *eva_net_load(const char *path, char *err, int errlen);
++void eva_net_free(EvaNet *n);
++/* Reset the recurrent state (CMLP slot 4 FUN_180122f90 -> LSTM slot 2 FUN_1801243c0), once per utterance. */
++void eva_net_reset(EvaNet *n);
++/* One step: x[in] -> y[out] (CMLP forward FUN_180122b30).  Returns a pointer to the output (owned by the net). */
++const float *eva_net_forward(EvaNet *n, const float *x);
++
++#ifdef __cplusplus
++}
++#endif
++#endif
+--- a/src/eva_voice.c
++++ b/Engine/onecore/eva_voice.c
+@@ -0,0 +1,480 @@
++/* eva_voice.c - Microsoft Eva back end (see eva_voice.h).  ClassicVoices addition, ported from ~/code/eva-onecore
++ * (notes/eva_dnn.md, notes/eva_prosody.md there).  Status legend: [S] = transcribed from the decompile of the
++ * Windows 11 26100.1742 DLLs, [G] = inferred.
++ * Keep -ffp-contract=off like the rest of the engine. */
++#include "eva_voice.h"
++#include "eva_nn.h"
++#include "eva_crf.h"
++#include "zb_internal.h"
++#include "zf2_int.h"
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <math.h>
++
++#define EVA_MAXFEAT 64
++typedef struct {
++    int feature;           /* index into feat[] */
++    float mean, scale;     /* input = (x - mean) * scale */
++    int nval;
++    const uint32_t *val;   /* one-hot value list (nval == 0: numeric input) */
++} EvaQuestion;
++
++typedef struct {
++    uint8_t *file; long size; size_t maplen;
++    int nfeat, nframefeat, nframeq;
++    char feat[EVA_MAXFEAT][128];   /* dotted feature paths (ASCII) */
++    int nq;                        /* network input size (631) */
++    EvaQuestion *q;
++    int nprec;                     /* per-frame output size (127) */
++    const float *prec;             /* precision per output dim */
++    int nstream;
++    struct { int type, nseg, off[3], dim[3]; } stream[8];
++    float win[3][3];               /* the [1], [-.5 0 .5], [1 -2 1] windows of stream 1 */
++    /* model tail: customized F0 generation setting [G on the reader] */
++    int genlen; float genw[32], gen_enhance, gen_mean;
++} EvaNNM;
++
++typedef struct { int type, n; const float *src, *dst; } EvaHeqTable;
++typedef struct { uint8_t *file; size_t maplen; int ntab; EvaHeqTable tab[8]; } EvaHeq;
++
++static uint32_t rd32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
++static float rdf(const uint8_t *p) { float f; uint32_t u = rd32(p); memcpy(&f, &u, 4); return f; }
++
++/* APM string obfuscation (FUN_180039f60): key advances only on nonzero UTF-16 units */
++static const uint16_t KEY[8] = {0x3412, 0x7856, 0xbc9a, 0xf0de, 0x5634, 0xdebc, 0x9a78, 0x12f0};
++static int get_string(const uint8_t *s, uint32_t size, uint32_t off, char *out, int cap) {
++    /* decode from the start (the key index depends on every nonzero unit before off) */
++    uint32_t i; int j = 0, n = 0;
++    for (i = 0; i + 1 < size; i += 2) {
++        uint16_t c = (uint16_t)(s[i] | s[i + 1] << 8);
++        if (c) { c ^= KEY[j]; j = (j + 1) & 7; }
++        if (i >= off) {
++            if (!c) break;
++            if (n + 1 < cap) out[n++] = (char)(c < 128 ? c : '?');
++        }
++    }
++    out[n] = 0;
++    return n ? 0 : -1;
++}
++
++static int eva_nnm_load(EvaNNM *m, const char *path, char *err, int errlen) {
++    memset(m, 0, sizeof *m);
++    m->file = eva_map_file(path, &m->size, &m->maplen);
++    if (!m->file || m->size < 0x60) { snprintf(err, errlen, "cannot read %s", path); return -1; }
++    const uint8_t *d = m->file;
++    if (memcmp(d, "NNM ", 4)) { snprintf(err, errlen, "not an NNM file"); return -1; }
++    const uint8_t *h = d + 0x18;
++    uint32_t qo = rd32(h + 0x20), mo = rd32(h + 0x28), so = rd32(h + 0x30), ss = rd32(h + 0x34);
++    const uint8_t *p = d + qo;
++    m->nframefeat = (int)rd32(p); m->nframeq = (int)rd32(p + 4); p += 8;
++    m->nfeat = (int)rd32(p); p += 4;
++    if (m->nfeat > EVA_MAXFEAT) { snprintf(err, errlen, "too many features"); return -1; }
++    for (int i = 0; i < m->nfeat; i++, p += 4)
++        if (get_string(d + so, ss, rd32(p), m->feat[i], sizeof m->feat[i])) { snprintf(err, errlen, "bad string"); return -1; }
++    m->nq = (int)rd32(p); p += 4;
++    m->q = calloc((size_t)m->nq, sizeof(EvaQuestion));
++    for (int i = 0; i < m->nq; i++) {
++        EvaQuestion *q = &m->q[i];
++        q->feature = (int)rd32(p); q->mean = rdf(p + 4); q->scale = rdf(p + 8); q->nval = (int)rd32(p + 12); p += 16;
++        q->val = (const uint32_t *)p; p += 4 * q->nval;
++    }
++    m->nprec = (int)rd32(p); p += 4;
++    m->prec = (const float *)p; p += 4 * m->nprec;
++    /* output streams FUN_18012141c */
++    p = d + mo;
++    m->nstream = (int)rd32(p); p += 4;
++    for (int i = 0; i < m->nstream && i < 8; i++) {
++        m->stream[i].type = (int)rd32(p); m->stream[i].nseg = (int)rd32(p + 4); p += 8;
++        for (int k = 0; k < m->stream[i].nseg; k++, p += 8)
++            if (k < 3) { m->stream[i].off[k] = (int)rd32(p); m->stream[i].dim[k] = (int)rd32(p + 4); }
++    }
++    int nw = (int)rd32(p); p += 4;
++    for (int i = 0; i < nw; i++) {
++        int sid = (int)rd32(p), n = (int)rd32(p + 4); p += 8;
++        for (int k = 0; k < n; k++) {
++            int w = (int)rd32(p); p += 4;
++            if (sid == 1 && k < 3 && w <= 3)
++                for (int c = 0; c < w; c++) m->win[k][c] = rdf(p + 4 * c);
++            p += 4 * w;
++        }
++    }
++    /* model tail: {4, 0, 0, 1, 2, 15, w[15], EnhanceRate, Mean, 0} [G: read like the APM F0 blob] */
++    if (p + 24 <= d + mo + rd32(h + 0x2c)) {
++        int len = (int)rd32(p + 20);
++        if (len > 0 && len <= 32 && p + 24 + 4 * len + 8 <= d + m->size) {
++            m->genlen = len;
++            for (int k = 0; k < len; k++) m->genw[k] = rdf(p + 24 + 4 * k);
++            m->gen_enhance = rdf(p + 24 + 4 * len);
++            m->gen_mean = rdf(p + 28 + 4 * len);
++        }
++    }
++    return 0;
++}
++
++static void eva_nnm_free(EvaNNM *m) { free(m->q); eva_unmap_file(m->file, m->maplen); memset(m, 0, sizeof *m); }
++
++/* ---- HEQ ---- */
++static int eva_heq_load(EvaHeq *h, const char *path, char *err, int errlen) {
++    long n = 0;
++    memset(h, 0, sizeof *h);
++    h->file = eva_map_file(path, &n, &h->maplen);
++    if (!h->file) { snprintf(err, errlen, "cannot read %s", path); return -1; }
++    /* container FUN_180097ab8: "HEQT", GUID, u32 version, u32 checksum, u32 payload size -> payload at 0x24 */
++    if (n < 0x28 || memcmp(h->file, "HEQT", 4)) { snprintf(err, errlen, "not a HEQ file"); return -1; }
++    const uint8_t *p = h->file + 0x24, *end = h->file + n;
++    int nt = (int)rd32(p); p += 4;
++    for (int i = 0; i < nt && i < 8; i++) {
++        EvaHeqTable *t = &h->tab[i];
++        t->type = (int)rd32(p); t->n = (int)rd32(p + 4); p += 8;
++        if (p + 8 * (size_t)t->n > end) { snprintf(err, errlen, "HEQ table out of range"); return -1; }
++        t->src = (const float *)p; p += 4 * t->n;
++        t->dst = (const float *)p; p += 4 * t->n;
++        h->ntab++;
++    }
++    return 0;
++}
++static const EvaHeqTable *eva_heq_find(const EvaHeq *h, int type) {
++    for (int i = 0; i < h->ntab; i++) if (h->tab[i].type == type) return &h->tab[i];
++    return NULL;
++}
++/* FUN_1800ac8c0 (checked in disassembly): bisection on the source quantiles, then linear interpolation (and
++ * extrapolation past the ends) onto the target quantiles */
++static float eva_heq_map(const EvaHeqTable *t, float x) {
++    if (t->n < 2) return x;
++    int hi = t->n - 1, lo = -1, i = 0;
++    if (hi > 0) {
++        do {
++            i = (lo + hi) / 2;
++            if (x > t->src[i + 1]) lo = i;
++            else if (t->src[i] > x) hi = i;
++            else break;
++        } while (hi > lo + 1);
++    }
++    float r = 0.0f;
++    if (t->src[i + 1] != t->src[i]) { float a = t->src[i + 1] - t->src[i], b = x - t->src[i]; r = b / a; }
++    float d = t->dst[i + 1] - t->dst[i];
++    d = d * r;
++    return d + t->dst[i];
++}
++static void eva_heq_free(EvaHeq *h) { eva_unmap_file(h->file, h->maplen); memset(h, 0, sizeof *h); }
++
++/* minimal INI reader for the Eva keys the ZbConfig loader does not keep */
++static int ini_int(const char *path, const char *sec, const char *key, int def) {
++    FILE *f = fopen(path, "r");
++    char line[512], cur[128] = "";
++    int v = def;
++    if (!f) return def;
++    while (fgets(line, sizeof line, f)) {
++        char *p = line, *q;
++        while (*p == ' ' || *p == '\t') p++;
++        if (*p == '[') { q = strchr(p, ']'); if (q) { *q = 0; snprintf(cur, sizeof cur, "%s", p + 1); } continue; }
++        q = strchr(p, '=');
++        if (!q || strcmp(cur, sec)) continue;
++        *q = 0;
++        for (char *r = q - 1; r >= p && (*r == ' ' || *r == '\t'); r--) *r = 0;
++        if (!strcmp(p, key)) v = atoi(q + 1);
++    }
++    fclose(f);
++    return v;
++}
++
++struct EvaModel {
++    EvaNet *net;
++    EvaNNM nnm;
++    EvaHeq heq;
++    float normk;           /* NN.NumericLinguisticFeatureNormFactor (6 for 0x409, table 0x18018a250) [S] */
++    float heq_adj;         /* VoiceSetting.LogF0HeqAdjustment / 100 */
++    /* Sarah additions (en-GB, 2057): a feed-forward int16 net, one frame per step with frame skipping, a duration
++     * HEQ table and the five-band excitation stream; Eva (packed, no stream 6 / 7) is unaffected by all of them */
++    int lcid;
++    int sL, sG, sF, sV, sM;  /* output stream indices by type: 1 LSF, 5 gain, 2 log F0, 4 voicing, 7 MBE (-1 none) */
++    int skip;              /* NN.SkipFrameCount + 1, used by non-packed nets only (Sarah 3) */
++    float skipfac;         /* NN.FrameSkippingVarScaleFactor (Sarah 10) */
++    float dheq_adj;        /* VoiceSetting.DurationHeqAdjustment / 100 (only with a stream-6 HEQ table) */
++    int has_crf;           /* .BR2 / .TON / .ACL present (Eva) */
++    float mbe_offset;      /* MultiBandExcitation.Offset (default 0.0, [0, 1]) [S FUN_18005c910] */
++    ZbModel wm;            /* the NNM window set, for MLPG */
++    int f_state, f_frames, f_pct;
++    EvaProsody prosody;    /* .BR2 / .TON / .ACL */
++    zf2_voice *vf;
++};
++
++/* NN.NumericLinguisticFeatureNormFactor default per language (table 0x18018a270 / 0x18018a250) [S] */
++static int normk_default(int lcid) {
++    switch (lcid) { case 0x809: return 10; case 0x40c: return 11; case 0x410: return 17; case 0x80a: return 9;
++                    case 0x407: return 10; case 0xc09: return 9; default: return 6; }
++}
++static int nnm_stream(const EvaNNM *m, int type) {
++    for (int i = 0; i < m->nstream && i < 8; i++) if (m->stream[i].type == type) return i;
++    return -1;
++}
++static int file_exists(const char *path) { FILE *f = fopen(path, "rb"); if (f) fclose(f); return f != NULL; }
++/* "<vp>.<EXT>", or "<vp>.<ext>" when only the lower-case name exists (Sarah's files as Windows ships them; iOS's file
++ * system is case-sensitive) */
++static void data_path(char *out, size_t cap, const char *vp, const char *EXT) {
++    char low[16]; size_t i;
++    snprintf(out, cap, "%s.%s", vp, EXT);
++    if (file_exists(out)) return;
++    for (i = 0; EXT[i] && i + 1 < sizeof low; i++) low[i] = (char)(EXT[i] >= 'A' && EXT[i] <= 'Z' ? EXT[i] + 32 : EXT[i]);
++    low[i] = 0;
++    snprintf(out, cap, "%s.%s", vp, low);
++    if (!file_exists(out)) snprintf(out, cap, "%s.%s", vp, EXT);
++}
++
++EvaModel *eva_model_open(const char *vp, int lcid, zf2_voice *vf, char *err, int errlen) {
++    char path[1200];
++    EvaModel *e = calloc(1, sizeof *e);
++    static const char *const ext[3] = {"BR2", "TON", "ACL"};
++    if (!e) { snprintf(err, errlen, "out of memory"); return NULL; }
++    e->lcid = lcid;
++    data_path(path, sizeof path, vp, "NNM");
++    if (eva_nnm_load(&e->nnm, path, err, errlen)) goto fail;
++    data_path(path, sizeof path, vp, "HEQ");
++    if (eva_heq_load(&e->heq, path, err, errlen)) goto fail;
++    snprintf(path, sizeof path, "%s.INI", vp);
++    e->heq_adj = (float)ini_int(path, "VoiceSetting", "LogF0HeqAdjustment", 100) / 100.0f;
++    e->normk = (float)ini_int(path, "NN", "NumericLinguisticFeatureNormFactor", normk_default(lcid));
++    e->dheq_adj = (float)ini_int(path, "VoiceSetting", "DurationHeqAdjustment", 100) / 100.0f;
++    e->skip = ini_int(path, "NN", "SkipFrameCount", 0) + 1;
++    e->skipfac = (float)ini_int(path, "NN", "FrameSkippingVarScaleFactor", 1);
++    if (e->skipfac <= 0.0f) e->skipfac = 1.0f;
++    e->mbe_offset = (float)ini_int(path, "MultiBandExcitation", "Offset", 0);   /* integer read: only 0 / 1 [G]; Sarah has none */
++    data_path(path, sizeof path, vp, "TDAT");
++    e->net = eva_net_load(path, err, errlen);
++    if (!e->net) goto fail;
++    e->sL = nnm_stream(&e->nnm, 1); e->sG = nnm_stream(&e->nnm, 5); e->sF = nnm_stream(&e->nnm, 2);
++    e->sV = nnm_stream(&e->nnm, 4); e->sM = nnm_stream(&e->nnm, 7);
++    if (e->net->in != e->nnm.nq || e->net->out % e->nnm.nprec || e->sL < 0 || e->sG < 0 || e->sF < 0 || e->sV < 0
++        || e->nnm.stream[e->sL].dim[0] != 40 || e->nnm.stream[e->sL].nseg != 3 || e->nnm.stream[e->sG].nseg != 3
++        || e->nnm.stream[e->sF].nseg != 3
++        || (e->sM >= 0 && (e->nnm.stream[e->sM].nseg != 3 || e->nnm.stream[e->sM].dim[0] > ZB_MBE_MAXBANDS)))
++        { snprintf(err, errlen, "unexpected NNM / TDAT layout"); goto fail; }
++    snprintf(path, sizeof path, "%s.%s", vp, ext[0]);
++    e->has_crf = file_exists(path);
++    if (e->has_crf) {   /* statistical prosody models: CLinguisticProsodyTagger model runners (loc model table: BR2, TON, ACL) */
++        EvaCrf **slot[3] = {&e->prosody.br2, &e->prosody.ton, &e->prosody.acl};
++        for (int k = 0; k < 3; k++) {
++            snprintf(path, sizeof path, "%s.%s", vp, ext[k]);
++            *slot[k] = eva_crf_load(path, err, errlen);
++            if (!*slot[k]) goto fail;
++        }
++    }
++    e->f_state = e->nnm.nfeat - 3; e->f_frames = e->nnm.nfeat - 2; e->f_pct = e->nnm.nfeat - 1;
++    e->wm.nwin = 3; e->wm.winw[0] = 1; e->wm.winw[1] = 3; e->wm.winw[2] = 3;
++    e->wm.win[0][0] = e->nnm.win[0][0];
++    for (int k = 0; k < 3; k++) { e->wm.win[1][k] = e->nnm.win[1][k]; e->wm.win[2][k] = e->nnm.win[2][k]; }
++    e->vf = vf;
++    if (e->has_crf) zf2_voice_set_prosody_hook(vf, eva_prosody_hook, &e->prosody);
++    return e;
++fail:
++    eva_model_close(e);
++    return NULL;
++}
++
++void eva_model_close(EvaModel *e) {
++    if (!e) return;
++    if (e->vf && e->has_crf) zf2_voice_set_prosody_hook(e->vf, NULL, NULL);
++    eva_net_free(e->net);
++    eva_nnm_free(&e->nnm);
++    eva_heq_free(&e->heq);
++    eva_crf_free(e->prosody.br2); eva_crf_free(e->prosody.ton); eva_crf_free(e->prosody.acl);
++    free(e);
++}
++
++void eva_model_set_debug(EvaModel *e, int models, int verbose) {
++    e->prosody.verbose = verbose;
++    e->prosody.off = !models;
++}
++
++static int in_list(const EvaQuestion *q, int v) {
++    for (int i = 0; i < q->nval; i++) if ((int)q->val[i] == v) return 1;
++    return 0;
++}
++/* FUN_1800a7544: clamp a numeric input to mean +- K/scale (skipped when mean == 0, scale == 1 or scale == 0) */
++static float nclamp(const EvaQuestion *q, float v, float K) {
++    if (K == 0.0f || q->mean == 0.0f || q->scale == 1.0f || q->scale == 0.0f) return v;
++    float r = K / q->scale, hi = q->mean + r, lo = q->mean - r;
++    if (v <= hi) { if (v < lo) v = lo; } else v = hi;
++    return v;
++}
++
++static float heq_cb(const void *ctx, float x) { return eva_heq_map((const EvaHeqTable *)ctx, x); }
++
++int eva_synth(EvaModel *e, ZbVoice *vb, const zf2_sent *s, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn write,
++              void *user, ZbTrace *trace) {
++    const EvaNNM *m = &e->nnm;
++    const int NS = 5, NQ = m->nq, P = m->nprec, K = e->net->out / m->nprec;   /* K = 4 frames per network step */
++    const int nph = u->nphone, nst = nph * NS, D = m->stream[e->sL].dim[0];  /* D = 40 */
++    /* frame skipping, non-packed nets only (Sarah: S = 3) [S FUN_1800433c0, see the network loop] */
++    const int S = (K == 1 && e->skip > 1) ? e->skip : 1, G = K * S;
++    const int NB = e->sM >= 0 ? m->stream[e->sM].dim[0] : 0;                 /* MBE bands (Sarah 5) */
++    int rc = -1, T = 0, nf = m->nfeat - m->nframefeat;
++    ZbGauss *gd = calloc((size_t)nph + 1, sizeof(ZbGauss)), *gp = vb->m_pdur ? calloc((size_t)nph + 1, sizeof(ZbGauss)) : NULL;
++    int *dur = calloc((size_t)nst + 1, sizeof(int)), *stretch = calloc((size_t)nph + 1, sizeof(int));
++    zf2_value *vals = NULL;
++    int *fph = NULL, *fst = NULL, *fk = NULL, *vuv = NULL;
++    char *lowp = NULL;
++    float *x = NULL, *o = NULL, *pa = NULL, *ba = NULL, *lf0 = NULL, *lsf = NULL, *gain = NULL, *col = NULL, *mbe = NULL;
++    short *pcm = NULL, *wav = NULL;
++    if (!gd || (vb->m_pdur && !gp) || !dur || !stretch || nph <= 0) goto done;
++    /* ---- durations: Eva's APM state and phone duration trees, the HMM voices' duration code ---- */
++    for (int p = 0; p < nph; p++) {
++        const int *f = u->ph[p].f; int id = f[ZB_F_PhoneIdentity];
++        const uint8_t *leaf = zb_tree_leaf(vb, vb->m_dur, id, 0, f);
++        if (!leaf || zb_state_gauss(vb, vb->m_dur, leaf, &gd[p])) goto done;
++        if (gp) {
++            leaf = zb_tree_leaf(vb, vb->m_pdur, id, 0, f);
++            if (!leaf || zb_state_gauss(vb, vb->m_pdur, leaf, &gp[p])) goto done;
++        }
++    }
++    {   /* Sarah: duration HEQ (stream-6 table) [S duration predictor]; Eva's HEQ has no such table */
++        const EvaHeqTable *dh = eva_heq_find(&e->heq, 6);
++        if (dh) zb_durations_heq(vb, u, sapi, gd, gp, NS, dur, stretch, heq_cb, dh, e->dheq_adj);
++        else zb_durations_ex(vb, u, sapi, gd, gp, NS, dur, stretch);
++    }
++    for (int k = 0; k < nst; k++) T += dur[k];
++    if (T <= 0) goto done;
++    /* ---- phone-level feature values (the NNM's 43 paths) ---- */
++    vals = calloc((size_t)nf * (size_t)nph, sizeof(zf2_value));
++    fph = malloc(sizeof(int) * (size_t)T); fst = malloc(sizeof(int) * (size_t)T); fk = malloc(sizeof(int) * (size_t)T);
++    x = malloc(sizeof(float) * (size_t)NQ);
++    o = malloc(sizeof(float) * (size_t)P * (size_t)T);
++    vuv = calloc((size_t)T, sizeof(int));
++    lowp = calloc((size_t)T, 1);
++    if (!vals || !fph || !fst || !fk || !x || !o || !vuv || !lowp) goto done;
++    for (int f = 0; f < nf; f++)
++        if (zf2_eval_path(s, m->feat[f], vals + (size_t)f * nph))
++            for (int p = 0; p < nph; p++) vals[(size_t)f * nph + p].kind = -1;
++    for (int p = 0, t = 0; p < nph; p++)
++        for (int st = 0; st < NS; st++)
++            for (int k = 0; k < dur[p * NS + st]; k++, t++) { fph[t] = p; fst[t] = st; fk[t] = k; }
++    /* ---- the network: one step per K frames on the input row of the group's last frame [S FUN_1800433c0] ---- */
++    /* Sarah (non-packed, S > 1): one step per S frames on the input row of the group's LAST frame (partial final
++     * group: the utterance's last frame); that frame gets the NNM precision, the group's other frames the same
++     * output with precision / FrameSkippingVarScaleFactor [S FUN_1800433c0; the partial group's handling is G] */
++    eva_net_reset(e->net);
++    for (int g = 0; g < T; g += G) {
++        int t = g + G - 1 < T ? g + G - 1 : T - 1;
++        int p = fph[t], st = fst[t], d = dur[p * NS + st];
++        for (int j = 0; j < NQ; j++) {
++            const EvaQuestion *q = &m->q[j];
++            float v = 0.0f;
++            if (q->feature < nf) {
++                const zf2_value *fv = &vals[(size_t)q->feature * nph + p];
++                if (fv->kind == -1) v = 0.0f;
++                else if (q->nval) v = in_list(q, fv->value) ? 1.0f : 0.0f;
++                else v = (float)fv->value;
++                v = nclamp(q, v, e->normk);
++            } else if (q->feature == e->f_state) v = in_list(q, st + 2) ? 1.0f : 0.0f;
++            else if (q->feature == e->f_frames) v = nclamp(q, (float)d, e->normk);
++            else if (q->feature == e->f_pct) v = (float)fk[t] / (float)d;
++            x[j] = (v - q->mean) * q->scale;
++        }
++        const float *y = eva_net_forward(e->net, x);
++        if (S == 1)
++            for (int k = 0; k < K && g + k < T; k++) memcpy(o + (size_t)(g + k) * P, y + (size_t)k * P, sizeof(float) * (size_t)P);
++        else
++            for (int k = 0; k < S && g + k < T; k++) {
++                memcpy(o + (size_t)(g + k) * P, y, sizeof(float) * (size_t)P);
++                lowp[g + k] = (char)(g + k != t);
++            }
++    }
++    /* voicing: raw output (Eva 126, Sarah 141) <= VoicedWeightThreshold (0.5) [S FUN_1800a9170 / FUN_1800a4380] */
++    for (int t = 0; t < T; t++) vuv[t] = o[(size_t)t * P + m->stream[e->sV].off[0]] <= vb->cfg.voiced_thr;
++    /* ---- per-frame Gaussians (mean x precision, precision), first / last frame all zero [S FUN_1800a988c], MLPG
++     *      dimension by dimension on flat [T][3] arrays (zb_mlpg_float_arr = zb_mlpg_float's arithmetic) ---- */
++    pa = malloc(sizeof(float) * 3 * (size_t)T); ba = malloc(sizeof(float) * 3 * (size_t)T);
++    col = malloc(sizeof(float) * (size_t)T);
++    lf0 = calloc((size_t)T, sizeof(float)); gain = calloc((size_t)T, sizeof(float));
++    lsf = calloc((size_t)T * (size_t)D, sizeof(float));
++    if (!pa || !ba || !col || !lf0 || !gain || !lsf) goto done;
++    for (int dim = 0; dim <= D + 1; dim++) {     /* 0..39 LSF, 40 gain, 41 log F0 */
++        int str = dim < D ? e->sL : dim == D ? e->sG : e->sF, k = dim < D ? dim : 0;
++        for (int t = 0; t < T; t++) {
++            const float *y = o + (size_t)t * P;
++            int edge = t == 0 || t == T - 1;
++            for (int w = 0; w < 3; w++) {
++                int dd = m->stream[str].off[w] + k;
++                float pr = lowp[t] ? m->prec[dd] / e->skipfac : m->prec[dd];
++                pa[3 * t + w] = edge ? 0.0f : pr;
++                ba[3 * t + w] = edge ? 0.0f : pr * y[dd];
++            }
++        }
++        zb_mlpg_float_arr(&e->wm, pa, ba, T, 1, col);
++        for (int t = 0; t < T; t++) {
++            if (dim < D) lsf[(size_t)t * D + dim] = col[t];
++            else if (dim == D) gain[t] = col[t];
++            else lf0[t] = vuv[t] ? col[t] : 0.0f;     /* log F0 over all frames, unvoiced -> 0 [S] */
++        }
++    }
++    /* Sarah: the five-band excitation strengths (stream 7) [S PostNN FUN_1800a988c / FUN_1800a9170 / FUN_1800a6788]:
++     * MLPG like the other streams, except that only the utterance's FIRST frame gets the zero Gaussian (the engine's
++     * last-frame test is off by a chunk for this stream); a frame whose raw voicing output > VoicedWeightThreshold gets
++     * all zeros, others MLPG + MultiBandExcitation.Offset (0 for Sarah); then per phone: a vowel's strengths
++     * v = ADD[b] + v clamped to [LO[b], HI[b]], any other phone's clamped to [0, 1] (tables 0x18018a2a0 / 2b8 / 2d0;
++     * "vowel" = phone flag bit 0 of the language data's phone set [G]) */
++    if (NB > 0) {
++        static const float ADD[5] = {0.1f, 0.25f, 0.2f, 0.1f, 0.0f}, HI[5] = {1.0f, 0.9f, 0.7f, 0.6f, 0.5f},
++                           LO[5] = {0.8f, 0.6f, 0.4f, 0.3f, 0.2f};
++        mbe = calloc((size_t)T * (size_t)NB, sizeof(float));
++        if (!mbe) goto done;
++        for (int b = 0; b < NB; b++) {
++            for (int t = 0; t < T; t++) {
++                const float *y = o + (size_t)t * P;
++                for (int w = 0; w < 3; w++) {
++                    int dd = m->stream[e->sM].off[w] + b;
++                    float pr = lowp[t] ? m->prec[dd] / e->skipfac : m->prec[dd];
++                    pa[3 * t + w] = t == 0 ? 0.0f : pr;
++                    ba[3 * t + w] = t == 0 ? 0.0f : pr * y[dd];
++                }
++            }
++            zb_mlpg_float_arr(&e->wm, pa, ba, T, 1, col);
++            for (int t = 0; t < T; t++) {
++                float vv = o[(size_t)t * P + m->stream[e->sV].off[0]] > vb->cfg.voiced_thr ? 0.0f : col[t] + e->mbe_offset;
++                mbe[(size_t)t * NB + b] = vv;
++            }
++        }
++        for (int p = 0, t = 0; p < nph; p++) {
++            int id = u->ph[p].f[ZB_F_PhoneIdentity], nfr = 0;
++            int vowel = id > 0 && id < Z2_PS_MAX && (e->vf->ps.flags[id] & 1u);
++            for (int st = 0; st < NS; st++) nfr += dur[p * NS + st];
++            for (int k = 0; k < nfr && t < T; k++, t++)
++                for (int b = 0; b < NB && b < 5; b++) {
++                    float vv = mbe[(size_t)t * NB + b];
++                    if (vowel) { vv = ADD[b] + vv; if (vv > HI[b]) vv = HI[b]; if (LO[b] > vv) vv = LO[b]; }
++                    else { if (vv > 1.0f) vv = 1.0f; if (0.0f > vv) vv = 0.0f; }
++                    mbe[(size_t)t * NB + b] = vv;
++                }
++        }
++    }
++    /* LogF0 HEQ [S FUN_1800a8c90 -> FUN_1800a0ab8]: lf0 > 3.0: heq(lf0)*a + (1-a)*lf0 */
++    {
++        const EvaHeqTable *ht = eva_heq_find(&e->heq, 2);
++        float oneminus = 1.0f - e->heq_adj;
++        if (ht) for (int t = 0; t < T; t++)
++            if (3.0f < lf0[t]) { float a = eva_heq_map(ht, lf0[t]) * e->heq_adj, b = oneminus * lf0[t]; lf0[t] = a + b; }
++    }
++    /* ---- export [S FUN_1800abee0]: expf, LSF repair, the pitch controls ---- */
++    for (int t = 0; t < T; t++) if (lf0[t] != 0.0f) lf0[t] = expf(lf0[t]);
++    zb_lsf_repair(lsf, T, D);
++    zb_apply_pitch(vb, u, sapi, dur, NS, lf0, T);
++    if (trace) {
++        trace->nphone = nph; trace->nstate = NS; trace->nframe = T; trace->order = D;
++        trace->dur = malloc(sizeof(int) * (size_t)nst);
++        if (trace->dur) memcpy(trace->dur, dur, sizeof(int) * (size_t)nst);
++    }
++    /* ---- the float LSF vocoder at order 40 (Eva's NNM has no Sew stream, so no ITFTE [S]) + wave stage ---- */
++    free(o); o = NULL; free(pa); pa = NULL; free(ba); ba = NULL;
++    pcm = calloc((size_t)T * (size_t)vb->shift + 1, sizeof(short));
++    if (!pcm) goto done;
++    zb_vocoder_float_mbe(vb, u, dur, NS, T, lf0, lsf, gain, stretch, pcm, D, mbe, NB);   /* mbe NULL: Eva, the plain path */
++    long nwav = zb_wave_sps(vb, u, sapi, dur, NS, stretch, NULL, 0, pcm, &wav);
++    zb_srand(vb, 0x406);
++    rc = 0;
++    if (write && nwav > 0) rc = write(user, wav, (int)nwav);
++done:
++    free(gd); free(gp); free(dur); free(stretch); free(vals); free(fph); free(fst); free(fk); free(vuv); free(lowp);
++    free(x); free(o); free(pa); free(ba); free(col); free(lf0); free(lsf); free(gain); free(pcm); free(wav); free(mbe);
++    return rc;
++}
+--- a/src/eva_voice.h
++++ b/Engine/onecore/eva_voice.h
+@@ -0,0 +1,40 @@
++/* eva_voice.h - Microsoft Eva (the Windows 10 / 11 neural "Cortana" voice) as a back end of this engine.
++ * ClassicVoices addition (not in the upstream): ported from ~/code/eva-onecore, reconstructed from the Windows 11
++ * 26100.1742 MSTTSEngine_OneCore.dll / MSTTSLoc_OneCore.dll.
++ *
++ * Eva shares the front end (zf1, zf2), her duration model is an ordinary APM (Dur + PDur trees), and her sound comes
++ * from the ordinary float LSF vocoder at order 40.  What differs: a neural network (M1033Eva.NNM describes its 631
++ * inputs, M1033Eva.TDAT holds 7 layers: int8 dense + 3 projected LSTMs) predicts the spectrum / pitch / loudness /
++ * voicing targets every 5 ms, with pitch histogram equalisation (M1033Eva.HEQ), and three CRF models
++ * (M1033Eva.BR2 / .TON / .ACL) replace the rule-based phrase breaks, boundary tones and pitch accents. */
++#ifndef EVA_VOICE_H
++#define EVA_VOICE_H
++
++#include "zb.h"
++#include "zf2.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++typedef struct EvaModel EvaModel;
++
++/* voicepath = "<dir>/M1033Eva" (.NNM .TDAT .HEQ .BR2 .TON .ACL .INI are read); attaches the prosody models to vf.
++ * Also Microsoft Sarah: "<dir>/M2057Sarah", lcid 2057 (.nnm .tdat .heq - Windows' lower-case names are accepted -, no
++ * prosody models).  NULL on failure (message in err). */
++EvaModel *eva_model_open(const char *voicepath, int lcid, zf2_voice *vf, char *err, int errlen);
++void eva_model_close(EvaModel *m);
++
++/* One sentence, the counterpart of zb_synth: vb = the ZbVoice loaded from M1033Eva.APM (durations, vocoder state,
++ * INI settings), s / u = zf2_run / zf2_features of the sentence.  Calls write() once with the whole sentence;
++ * fills trace->nphone / nstate / nframe / dur (for the host's event timing).  0 = ok, else what write returned / -1. */
++int eva_synth(EvaModel *m, ZbVoice *vb, const zf2_sent *s, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn write,
++              void *user, ZbTrace *trace);
++
++/* debug (Mac tools only): print the per-word prosody labels to stderr; models on/off (off = the rules) */
++void eva_model_set_debug(EvaModel *m, int models, int verbose);
++
++#ifdef __cplusplus
++}
++#endif
++#endif
+--- a/src/zb.h
++++ b/Engine/onecore/zb.h
+@@ -80,6 +80,9 @@
+     ZB_F_PrevPhraseSyllableNumber,         /* Phone.Syllable.Word.Phrase.PrevPhrase.SyllableNumber */
+     ZB_F_PrevPhraseWordNumber,             /* Phone.Syllable.Word.Phrase.PrevPhrase.WordNumber */
+     ZB_F_PhraseToBIFinalBoundaryTone,      /* Phone.Syllable.Word.Phrase.ToBIFinalBoundaryTone (Mark) */
++    ZB_F_SylToBIAccent,                    /* Phone.Syllable.ToBIAccent (Eva) */
++    ZB_F_PrevSylToBIAccent,                /* Phone.Syllable.PrevSyllable.ToBIAccent (Eva) */
++    ZB_F_NextSylToBIAccent,                /* Phone.Syllable.NextSyllable.ToBIAccent (Eva) */
+     ZB_NFEAT
+ };
+ extern const char *const zb_feature_path[ZB_NFEAT];   /* full dotted APM path per column */
+@@ -162,6 +165,8 @@
+     int rate;           /* -10..10 */
+     int volume;         /* 0..100 */
+     ZbStyle style;      /* all zero = neutral */
++    int rate_milli;     /* ClassicVoices patch: fraction of a rate step on top of everything else, in 1/1000 steps
++                           (0..999; 0 = the original engine exactly) - see zira_tts_set_rate_f */
+ } ZbSapi;
+ 
+ typedef struct ZbVoice ZbVoice;
+@@ -177,6 +182,7 @@
+ ZbVoice *zb_voice_load(const char *voicepath, char *err, int errlen);
+ void zb_voice_free(ZbVoice *v);
+ int zb_voice_is_int(const ZbVoice *v);     /* 0 = float path (David), 1 = fixed-point path (Zira, Mark) */
++int zb_voice_has_acoustics(const ZbVoice *v);   /* ClassicVoices addition: 0 for Eva's duration-only APM */
+ 
+ /* PCM sink: 16 kHz mono int16. Return 0 to continue. */
+ typedef int (*zb_write_fn)(void *user, const short *pcm, int nsamples);
+--- a/src/zb_apm.c
++++ b/Engine/onecore/zb_apm.c
+@@ -26,7 +26,8 @@
+     "Phone.Syllable.Word.PrevWord.SyllableNumber", "Phone.Syllable.Word.SyllableNumber", "Phone.PhoneIdentity",
+     "Phone.Syllable.Word.FwPosInYesNoQuestion", "Phone.Syllable.Word.Phrase.NextPhrase.SyllableNumber",
+     "Phone.Syllable.Word.Phrase.NextPhrase.WordNumber", "Phone.Syllable.Word.Phrase.PrevPhrase.SyllableNumber",
+-    "Phone.Syllable.Word.Phrase.PrevPhrase.WordNumber", "Phone.Syllable.Word.Phrase.ToBIFinalBoundaryTone"};
++    "Phone.Syllable.Word.Phrase.PrevPhrase.WordNumber", "Phone.Syllable.Word.Phrase.ToBIFinalBoundaryTone",
++    "Phone.Syllable.ToBIAccent", "Phone.Syllable.PrevSyllable.ToBIAccent", "Phone.Syllable.NextSyllable.ToBIAccent"};
+ 
+ static uint32_t rd32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
+ static uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
+@@ -192,7 +193,7 @@
+         case ZB_M_PDUR: v->m_pdur = m; break;
+         }
+     }
+-    if (!v->m_lsf || !v->m_lf0 || !v->m_dur) { snprintf(err, errlen, "APM lacks LSF/LF0/duration model"); return -1; }
++    if (!v->m_dur) { snprintf(err, errlen, "APM lacks a duration model"); return -1; }   /* Eva: Dur + PDur only (the rest is the DNN) */
+     return 0;
+ }
+ 
+--- a/src/zb_dur.c
++++ b/Engine/onecore/zb_dur.c
+@@ -102,8 +102,10 @@
+     /* R = Config.RateAdjustment, plus the emotion recipe's RateAdjustment (see ZbStyle in zb.h; neutral = no
+      * change, so this stays bit-identical to the engine for plain speech) */
+     R = (unsigned)zb_style_pct(cfg->rate_adj, sapi ? sapi->style.rate : 0);
+-    if (site == 0 && c->rate == 0 && R == 100) return 1;
++    if (site == 0 && c->rate == 0 && R == 100 && !(sapi && sapi->rate_milli)) return 1;
+     f = zb_pow3_tenth(c->rate) * zb_pow3_tenth(site);
++    /* ClassicVoices patch: fractional rate (0 = untouched) */
++    if (sapi && sapi->rate_milli) f = f * (float)pow(3.0, (double)sapi->rate_milli / 10000.0);
+     f = f * sr;
+     if (R != 100 && !c->is_sil) f = ((float)R * f) / 100.0f;
+     if (cfg->mix_rate_scale) {
+@@ -124,6 +126,16 @@
+ void zb_durations_ex(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const ZbGauss *gd, const ZbGauss *gp, int nstate,
+                      int *dur, int *stretch)
+ {
++    zb_durations_heq(v, u, sapi, gd, gp, nstate, dur, stretch, NULL, NULL, 0.0f);
++}
++
++/* ClassicVoices patch (Microsoft Sarah): the same, with the neural voices' duration histogram equalisation (engine duration predictor,
++ * Win11 build ~0x1800235xx; HEQ table stream 6): for a non-silence phone T = heq(T)*a + (1-a)*T, a =
++ * DurationHeqAdjustment/100, and with a table present and a != 0 the per-phone frame limit is skipped.  heq == NULL is
++ * exactly zb_durations_ex. */
++void zb_durations_heq(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const ZbGauss *gd, const ZbGauss *gp, int nstate,
++                      int *dur, int *stretch, float (*heq)(const void *ctx, float x), const void *heq_ctx, float heq_adj)
++{
+     const ZbConfig *cfg = &v->cfg;
+     int p, i;
+     float carry = 0.0f;
+@@ -143,6 +155,10 @@
+             if (P <= (float)nstate) P = (float)nstate;
+             T = (P - S) * cfg->pdur_weight + S;
+         }
++        if (heq && !c->is_sil && !c->is_pause) {   /* ClassicVoices patch (Sarah): duration HEQ */
++            float h = heq(heq_ctx, T) * heq_adj, r = (1.0f - heq_adj) * T;
++            T = h + r;
++        }
+         if (0.0f < V) rho = (T - S) / V;
+ #ifdef ZB_DUR_CARRY_RESET
+         carry = 0.0f;
+@@ -159,7 +175,7 @@
+         }
+         if (1.0 < fabs((double)carry)) zb_dur_rescale(&sum, (unsigned)(int)(T + 0.5f), d, (unsigned)nstate);
+         limit = c->is_pause ? 80u : (unsigned)cfg->max_frames;
+-        if (limit < sum) zb_dur_rescale(&sum, limit, d, (unsigned)nstate);
++        if (!(heq && heq_adj != 0.0f) && limit < sum) zb_dur_rescale(&sum, limit, d, (unsigned)nstate);   /* (Sarah: no limit with a HEQ) */
+         i = dur_rate(v, c, sapi, &sum, d, (unsigned)nstate);
+         if (stretch) stretch[p] = i;
+     }
+--- a/src/zb_internal.h
++++ b/Engine/onecore/zb_internal.h
+@@ -122,12 +122,17 @@
+ void zb_dur_rescale(unsigned *sum, unsigned target, int *dur, unsigned n);
+ void zb_durations_ex(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const ZbGauss *gd, const ZbGauss *gp, int nstate,
+                      int *dur, int *stretch);
++/* ClassicVoices patch (Microsoft Sarah): the same with the neural voices' duration HEQ; heq == NULL = zb_durations_ex */
++void zb_durations_heq(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const ZbGauss *gd, const ZbGauss *gp, int nstate,
++                      int *dur, int *stretch, float (*heq)(const void *ctx, float x), const void *heq_ctx, float heq_adj);
+ void zb_durations(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const ZbGauss *gd, const ZbGauss *gp, int nstate,
+                   int *dur);
+ 
+ /* zb_mlpg.c */
+ /* frames: per compact frame the Gaussian (already boundary-zeroed copies), D static dims, nwin 3 */
+ void zb_mlpg_float(const ZbModel *m, ZbGauss *const *fr, int T, int D, float *out /*[T*D]*/);
++/* ClassicVoices patch (Eva): same, on flat arrays prec/mp [T][3][D] */
++void zb_mlpg_float_arr(const ZbModel *m, const float *prec, const float *mp, int T, int D, float *out /*[T*D]*/);
+ 
+ /* zb_wave.c: post-vocoder SPS wave stage (Sonic rate change + smoother, voice volume, per-phone SAPI volume).
+  * pcm: nframes*shift samples of the utterance (after silence zeroing); returns a malloc'ed buffer in *out. */
+@@ -138,7 +143,17 @@
+ void zb_scale_pcm(short *s, long n, float g);
+ 
+ /* zb_vocoder.c */
++/* zb_synth.c (ClassicVoices patch: exported for the Eva back end) */
++void zb_apply_pitch(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const int *dur, int nst, float *f0, int T);
++void zb_lsf_repair(float *lsf, int rows, int p);
+ void zb_vocoder_init(ZbVoice *v);
++/* same as zb_vocoder_float with an explicit LSF order p (24 for the HMM voices, 40 for Eva) */
++void zb_vocoder_float_p(ZbVoice *v, const ZbUtt *u, const int *dur, int nstate, int T, const float *f0, float *lsf,
++                        const float *gain, const int *stretch, short *pcm, int p);
++/* ClassicVoices patch (Microsoft Sarah): with the five-band excitation, mbe = [T][nb] strengths (NULL = zb_vocoder_float_p) */
++#define ZB_MBE_MAXBANDS 5
++void zb_vocoder_float_mbe(ZbVoice *v, const ZbUtt *u, const int *dur, int nstate, int T, const float *f0, float *lsf,
++                          const float *gain, const int *stretch, short *pcm, int p, const float *mbe, int nb);
+ void zb_vocoder_float(ZbVoice *v, const ZbUtt *u, const int *dur, int nstate, int T, const float *f0, float *lsf, const float *gain,
+                       const int *stretch, short *pcm);
+ int zb_split_blocks(const ZbUtt *u, const int *phfr, int ph0, int nph, const int *stretch, int cap, int *blk);
+--- a/src/zb_mlpg.c
++++ b/Engine/onecore/zb_mlpg.c
+@@ -137,3 +137,137 @@
+     free(R);
+     free(g);
+ }
++
++/* ClassicVoices patch (Eva): the same MLPG, statement for statement, on flat per-frame arrays [T][3][D]
++ * (static, delta, delta-delta) instead of ZbGauss pointers - Eva has one Gaussian per FRAME, and ZbGauss frames
++ * would cost ~1 KB each.  mlpg_dim_arr is mlpg_dim with only the P()/B() accessors changed. */
++static void mlpg_dim_arr(const ZbModel *m, const float *pa, const float *ba, int T, int D, int d, double (*W)[3], double *R, double *g, float *out)
++{
++    /* window coefficients: delta c[-1], c[+1]; delta-delta a[-1], a[0], a[+1] */
++    const float dm = m->win[1][0], dp = m->win[1][2];
++    const float am = m->win[2][0], a0 = m->win[2][1], ap = m->win[2][2];
++    const float f17 = a0 * a0, f20 = a0 * ap, f18 = dp * dp, f21 = dm * dm, f19 = ap * ap, f22 = am * am;
++    const int is = d, id = d + D, ia = d + 2 * D;
++    int t;
++#define P(t, i) (pa[(size_t)(t) * 3 * (size_t)D + (size_t)(i)])
++#define B(t, i) (ba[(size_t)(t) * 3 * (size_t)D + (size_t)(i)])
++    /* row 0 */
++    W[0][0] = (double)P(0, is);
++    W[0][0] = (double)(f17 * P(0, ia)) + W[0][0];
++    W[0][1] = (double)(f20 * P(0, ia));
++    W[0][2] = 0.0;
++    R[0] = (double)B(0, is);
++    R[0] = (double)(a0 * B(0, ia)) + R[0];
++    if (T > 1) {
++        W[0][0] = (double)(f21 * P(1, id)) + W[0][0];
++        W[0][0] = (double)(f22 * P(1, ia)) + W[0][0];
++        W[0][1] = (double)(f20 * P(1, ia)) + W[0][1];
++        W[0][2] = (double)(dm * dp * P(1, id)) + W[0][2];
++        W[0][2] = (double)(am * ap * P(1, ia)) + W[0][2];
++        R[0] = (double)(dm * B(1, id)) + R[0];
++        R[0] = (double)(am * B(1, ia)) + R[0];
++    }
++    for (t = 1; t + 2 < T; t++) {
++        double x = (double)P(t, is);
++        x = (double)(f18 * P(t - 1, id)) + x;
++        x = (double)(f21 * P(t + 1, id)) + x;
++        x = (double)(f19 * P(t - 1, ia)) + x;
++        x = (double)(f17 * P(t, ia)) + x;
++        W[t][0] = (double)(f22 * P(t + 1, ia)) + x;
++        W[t][1] = (double)(f20 * P(t, ia));
++        W[t][1] = (double)(am * a0 * P(t + 1, ia)) + W[t][1];
++        W[t][2] = (double)(dm * dp * P(t + 1, id));
++        W[t][2] = (double)(am * ap * P(t + 1, ia)) + W[t][2];
++        R[t] = (double)B(t, is);
++        R[t] = (double)(dp * B(t - 1, id)) + R[t];
++        R[t] = (double)(dm * B(t + 1, id)) + R[t];
++        R[t] = (double)(ap * B(t - 1, ia)) + R[t];
++        R[t] = (double)(a0 * B(t, ia)) + R[t];
++        R[t] = (double)(am * B(t + 1, ia)) + R[t];
++    }
++    if (T >= 3) {
++        double x;
++        t = T - 2;
++        x = (double)P(t, is);
++        x = (double)(f18 * P(t - 1, id)) + x;
++        x = (double)(f21 * P(t + 1, id)) + x;
++        x = (double)(f19 * P(t - 1, ia)) + x;
++        x = (double)(f17 * P(t, ia)) + x;
++        W[t][0] = (double)(f22 * P(t + 1, ia)) + x;
++        W[t][1] = (double)(f20 * P(t, ia));
++        W[t][1] = (double)(am * a0 * P(t + 1, ia)) + W[t][1];
++        W[t][2] = 0.0;
++        R[t] = (double)B(t, is);
++        R[t] = (double)(dp * B(t - 1, id)) + R[t];
++        R[t] = (double)(dm * B(t + 1, id)) + R[t];
++        R[t] = (double)(ap * B(t - 1, ia)) + R[t];
++        R[t] = (double)(a0 * B(t, ia)) + R[t];
++        R[t] = (double)(am * B(t + 1, ia)) + R[t];
++    }
++    if (T >= 2) {
++        double x;
++        t = T - 1;
++        x = (double)P(t, is);
++        x = (double)(f18 * P(t - 1, id)) + x;
++        x = (double)(f19 * P(t - 1, ia)) + x;
++        W[t][0] = (double)(f17 * P(t, ia)) + x;
++        W[t][1] = 0.0;
++        W[t][2] = 0.0;
++        R[t] = (double)B(t, is);
++        R[t] = (double)(dp * B(t - 1, id)) + R[t];
++        R[t] = (double)(ap * B(t - 1, ia)) + R[t];
++        R[t] = (double)(a0 * B(t, ia)) + R[t];
++    }
++#undef P
++#undef B
++    /* LDL^T (FUN_18000cf70), band width 3 */
++    GUARD(W[0][0]);
++    W[0][1] = W[0][1] / W[0][0];
++    GUARD(W[0][0]);
++    W[0][2] = W[0][2] / W[0][0];
++    if (T > 1) {
++        W[1][0] = W[1][0] - W[0][1] * W[0][1] * W[0][0];
++        W[1][1] = W[1][1] - W[0][2] * W[0][1] * W[0][0];
++        GUARD(W[1][0]);
++        W[1][1] = W[1][1] / W[1][0];
++        W[1][2] = W[1][2] / W[1][0];
++        for (t = 2; t < T; t++) {
++            W[t][0] = W[t][0] - W[t - 2][2] * W[t - 2][2] * W[t - 2][0];
++            W[t][0] = W[t][0] - W[t - 1][1] * W[t - 1][1] * W[t - 1][0];
++            W[t][1] = W[t][1] - W[t - 1][1] * W[t - 1][2] * W[t - 1][0];
++            GUARD(W[t][0]);
++            W[t][1] = W[t][1] / W[t][0];
++            W[t][2] = W[t][2] / W[t][0];
++        }
++    }
++    /* substitution (FUN_180012e30) */
++    if (T < 2) {
++        g[0] = R[0] / W[0][0];
++        out[d] = (float)g[0];
++        return;
++    }
++    g[0] = R[0];
++    g[1] = R[1] - g[0] * W[0][1];
++    for (t = 2; t < T; t++) g[t] = (R[t] - W[t - 1][1] * g[t - 1]) - W[t - 2][2] * g[t - 2];
++    for (t = 0; t < T; t++) g[t] = g[t] / W[t][0];
++    out[(T - 1) * D + d] = (float)g[T - 1];
++    out[(T - 2) * D + d] = (float)(g[T - 2] - (double)out[(T - 1) * D + d] * W[T - 2][1]);
++    for (t = T - 3; t >= 0; t--)
++        out[t * D + d] = (float)((g[t] - (double)out[(t + 1) * D + d] * W[t][1]) - (double)out[(t + 2) * D + d] * W[t][2]);
++}
++
++void zb_mlpg_float_arr(const ZbModel *m, const float *prec, const float *mp, int T, int D, float *out)
++{
++    double (*W)[3];
++    double *R, *g;
++    int d;
++    if (T <= 0) return;
++    W = (double (*)[3])malloc(sizeof(double) * 3 * (size_t)T);
++    R = (double *)malloc(sizeof(double) * (size_t)T);
++    g = (double *)malloc(sizeof(double) * (size_t)T);
++    if (W && R && g)
++        for (d = 0; d < D; d++) mlpg_dim_arr(m, prec, mp, T, D, d, W, R, g, out);
++    free(W);
++    free(R);
++    free(g);
++}
+--- a/src/zb_synth.c
++++ b/Engine/onecore/zb_synth.c
+@@ -37,6 +37,8 @@
+ }
+ 
+ int zb_voice_is_int(const ZbVoice *v) { return v->isint; }
++/* ClassicVoices addition: 1 if the APM has the LSF and LF0 models (0 = Eva's duration-only APM) */
++int zb_voice_has_acoustics(const ZbVoice *v) { return v->m_lsf && v->m_lf0; }
+ 
+ void zb_trace_free(ZbTrace *t)
+ {
+@@ -176,7 +178,8 @@
+ }
+ 
+ /* FUN_18001b100 (pitch) + FUN_1800a2810 (range); the SAPI controls plus the emotion recipe (ZbStyle, zb.h) */
+-static void apply_pitch(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const int *dur, int nst, float *f0, int T)
++/* ClassicVoices patch: exported (was static) for the Eva back end, eva_voice.c; unchanged */
++void zb_apply_pitch(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const int *dur, int nst, float *f0, int T)
+ {
+     const ZbConfig *cfg = &v->cfg;
+     int pa_adj = zb_style_pct(cfg->pitch_adj, sapi ? sapi->style.pitch : 0);
+@@ -235,6 +238,7 @@
+     int *stretch = NULL;
+     long nwav = 0;
+     const int D = 24;
++    if (!v->m_lsf || !v->m_lf0) return -1;   /* duration-only APM (Eva) */
+     if (v->isint) return zb_synth_int(v, u, sapi, write, user, trace);
+     memset(&um, 0, sizeof um);
+     if (lookup(v, u, &um)) goto done;
+@@ -282,7 +286,7 @@
+     for (t = 0; t < T; t++)
+         if (lf0[t] != 0.0f) lf0[t] = (float)exp((double)lf0[t]);
+     zb_lsf_repair(lsf, T, D);
+-    apply_pitch(v, u, sapi, um.dur, ns, lf0, T);
++    zb_apply_pitch(v, u, sapi, um.dur, ns, lf0, T);
+     if (trace) {
+         trace->f0 = (float *)malloc(sizeof(float) * (T + 1)); memcpy(trace->f0, lf0, sizeof(float) * T);
+         trace->lsf_fin = (float *)malloc(sizeof(float) * (T * D + 1)); memcpy(trace->lsf_fin, lsf, sizeof(float) * T * D);
+--- a/src/zb_synth_int.c
++++ b/Engine/onecore/zb_synth_int.c
+@@ -516,10 +516,12 @@
+         start += cnt;
+     }
+     zb_vocoder_int_reset(v);
++#ifndef CV_NO_DEBUG_ENV   /* ClassicVoices patch: no debug file dumps in the app */
+     if (getenv("ZB_DUMP_ILSF")) {   /* debug: LSF/gain as vocoded (after edge copy, sharpening, repair) */
+         FILE *df = fopen(getenv("ZB_DUMP_ILSF"), "ab");
+         if (df) { fwrite(&T, 4, 1, df); fwrite(lsf, 4, (size_t)T * order, df); fwrite(gain, 4, (size_t)T, df); fclose(df); }
+     }
++#endif
+     zb_silence_zero(v, u, um.dur, ns, pcm);
+     nwav = zb_wave_sps(v, u, sapi, um.dur, ns, um.stretch, blk, nblk, pcm, &wav);
+     rc = 0;
+--- a/src/zb_vocoder.c
++++ b/Engine/onecore/zb_vocoder.c
+@@ -249,7 +249,107 @@
+             for (k = 0; k < shift; k++) o[k] = v->noise_uv[off + k] * g + o[k];
+         else
+             for (k = 0; k < shift; k++) o[k] = g * v->noise[off + k];
++    }
++    free(mark);
++}
++
++/* ---------------------------------------------------------------- five-band excitation (Microsoft Sarah)
++ * ClassicVoices patch: the float excitation with [MultiBandExcitation] (FUN_1800094f8, taken instead of FUN_18000aaa8
++ * when the MBE matrix is present) [V disasm, via the Win11 build's FUN_18003ec70 / FUN_180105d14 / FUN_180105260]:
++ * the same pulse train, noise table, gains and rand() stream; the voiced / unvoiced 41-tap filters are rebuilt EVERY
++ * FRAME from the frame's five band strengths (bands = zb_band41, 0-2 / 2-3 / 3-4 / 4-6 / 6-8 kHz):
++ *     hv[k] = (float)sum_b v_b * band[b][k],  hu[k] = (float)sum_b (1 - v_b) * band[b][k]   (double sums)
++ * the pulse FIR runs frame by frame (FUN_180008e40: a pulse's tail in the next frame is filtered with that frame's hv),
++ * a voiced frame adds g * (hu filtered over 120 fresh noise samples at rand() % (1024 - shift - 40)), an unvoiced
++ * frame is g * noise[rand() % (1024 - shift) ...] (no "+ shift" here, unlike the plain path). */
++static void mbe_taps(const float *vb, float *hv, float *hu)
++{
++    int k, b;
++    for (k = 0; k < 41; k++) {
++        double dv = 0.0, du = 0.0;
++        for (b = 0; b < 5; b++) {
++            double w = (double)vb[b];
++            dv = dv + w * zb_band41[b][k];
++            du = du + (1.0 - w) * zb_band41[b][k];
++        }
++        hv[k] = (float)dv;
++        hu[k] = (float)du;
++    }
++}
++
++static void excitation_mbe(ZbVoice *v, ZbExcState *st, const float *f0, const float *mbe, int nb, int nfr, int n, int shift,
++                           float *out)
++{
++    int *mark = (int *)calloc((size_t)n + 1, sizeof(int));
++    int i, s = 0, m, k;
++    float g = shift == 40 ? v->g40 : shift == 80 ? v->g80 : 0.0f, hv[41], hu[41], vb[5];
++    unsigned char prev[41];
++    /* pulse train FUN_18002ce50 (as excitation()) */
++    for (i = 0; i < nfr && s < n; i++, s += shift) {
++        float f = f0[i];
++        if (f <= 3.0f) f = 0.0f;
++        else {
++            int T;
++            if (st->prevf0 <= 3.0f) { mark[s] = 1; st->last = s; }
++            T = (int)((float)v->rate / f);
++            if (T) {
++                for (m = s; m < s + shift; m++) {
++                    unsigned kk = (unsigned)(m - st->last) / (unsigned)T, q;
++                    if (kk >= 1) {
++                        int step = T, base = st->last;
++                        for (q = 0; q < kk; q++) {
++                            int pos = step + base;
++                            if (pos < 0) mark[0] = 1;
++                            else if (pos < n) mark[pos] = 1;
++                            step += T;
++                            st->last = m;
++                            base = m;
++                        }
++                    }
++                }
++            }
++        }
++        st->prevf0 = f;
+     }
++    st->last -= n;
++    /* per-frame pulse FIR: history = the previous frame's last 41 marks (first frame: the previous block's) */
++    for (k = 0; k < 41; k++) prev[k] = st->hist_valid ? st->hist[k] : 0;
++    for (i = 0; (i + 1) * shift <= n; i++) {
++        float *o = out + i * shift;
++        const int *mk = mark + i * shift;
++        int b;
++        for (b = 0; b < 5; b++) vb[b] = (i < nfr && b < nb) ? mbe[(size_t)i * nb + b] : 0.0f;
++        mbe_taps(vb, hv, hu);
++        for (k = 0; k < shift; k++) o[k] = 0.0f;
++        for (m = 0; m < 41; m++)
++            if (prev[m])
++                for (k = 0; k < 41; k++)
++                    if (m + k >= 41 && m + k - 41 < shift) o[m + k - 41] = hv[k] + o[m + k - 41];
++        for (m = 0; m < shift; m++)
++            if (mk[m])
++                for (k = 0; k < 41 && m + k < shift; k++) o[m + k] = hv[k] + o[m + k];
++        for (k = 0; k < 41; k++) {
++            int src = shift - 41 + k;
++            prev[k] = (unsigned char)(src >= 0 ? mk[src] != 0 : prev[src + 41]);
++        }
++        /* noise FUN_180105260 */
++        {
++            int r = zb_rand(v);
++            if (i < nfr && f0[i] > 3.0f) {
++                const float *x = v->noise + r % (1024 - (shift + 40));
++                for (m = 0; m < shift; m++) {
++                    double acc = 0.0;
++                    for (k = 0; k < 41; k++) acc = acc + (double)(x[m + 40 - k] * hu[k]);
++                    o[m] = g * (float)acc + o[m];
++                }
++            } else {
++                int off = r % (1024 - shift);
++                for (m = 0; m < shift; m++) o[m] = g * v->noise[off + m];
++            }
++        }
++    }
++    memcpy(st->hist, prev, 41);
++    st->hist_valid = 1;
+     free(mark);
+ }
+ 
+@@ -383,8 +483,21 @@
+ void zb_vocoder_float(ZbVoice *v, const ZbUtt *u, const int *dur, int nstate, int T, const float *f0, float *lsf, const float *gain,
+                       const int *stretch, short *pcm)
+ {
++    zb_vocoder_float_p(v, u, dur, nstate, T, f0, lsf, gain, stretch, pcm, 24);
++}
++
++void zb_vocoder_float_p(ZbVoice *v, const ZbUtt *u, const int *dur, int nstate, int T, const float *f0, float *lsf,
++                        const float *gain, const int *stretch, short *pcm, int p)
++{
++    zb_vocoder_float_mbe(v, u, dur, nstate, T, f0, lsf, gain, stretch, pcm, p, NULL, 0);
++}
++
++/* ClassicVoices patch (Microsoft Sarah): mbe = [T][nb] band strengths in 0..1 (nb <= 5), NULL = the plain excitation */
++void zb_vocoder_float_mbe(ZbVoice *v, const ZbUtt *u, const int *dur, int nstate, int T, const float *f0, float *lsf,
++                          const float *gain, const int *stretch, short *pcm, int p, const float *mbe, int nbands)
++{
+     const ZbConfig *cfg = &v->cfg;
+-    const int p = 24, shift = v->shift, n = T * shift;
++    const int shift = v->shift, n = T * shift;
+     float *exc, hist[64];
+     ZbExcState st;
+     int r, *phfr, *blk, nb, b, ph, cap = 0, f = 0;
+@@ -413,7 +526,8 @@
+         int nf = 0, k;
+         for (k = 0; k < blk[b]; k++) nf += phfr[ph + k];
+         ph += blk[b];
+-        excitation(v, &st, f0 + f, nf, nf * shift, shift, exc + (size_t)f * shift);
++        if (mbe) excitation_mbe(v, &st, f0 + f, mbe + (size_t)f * nbands, nbands, nf, nf * shift, shift, exc + (size_t)f * shift);
++        else excitation(v, &st, f0 + f, nf, nf * shift, shift, exc + (size_t)f * shift);
+         synth(lsf + (size_t)f * p, p, gain + f, exc + (size_t)f * shift, nf, shift, hist, pcm + (size_t)f * shift);
+         f += nf;
+     }
+--- a/src/zb_wave.c
++++ b/Engine/onecore/zb_wave.c
+@@ -88,6 +88,7 @@
+     if (site < -10) site = -10;
+     if (site > 10) site = 10;
+     r += 1000 * site;
++    if (sapi) r += sapi->rate_milli;   /* ClassicVoices patch: fractional rate, fine mode (0 = untouched) */
+     if (c->word90 != 1) {
+         /* + emotion.RateAdjustment - 100 (decompile 0x18004e2e5; see ZbStyle in zb.h) */
+         int pct = zb_style_pct(cfg->rate_adj, sapi ? sapi->style.rate : 0), dom = 100, k;
+--- a/src/zf.h
++++ b/Engine/onecore/zf.h
+@@ -154,6 +154,10 @@
+ /* dat_path: MSTTSLocEnUS.dat (NULL = C:\Windows\Speech_OneCore\Engines\TTS\en-US\MSTTSLocEnUS.dat).
+  * Returns NULL on failure. */
+ zf1_engine *zf1_open(const char *dat_path);
++/* ClassicVoices patch: the same for a locale's language data (1033 en-US = zf1_open; 2057 en-GB: MSTTSLocEnGB.dat
++ * and the en-GB domain files next to it), and raw access to a resource of the language data (NULL if absent). */
++zf1_engine *zf1_open_lcid(const char *dat_path, int lcid);
++const uint8_t *zf1_resource(const zf1_engine *e, uint32_t id1, uint32_t id2, size_t *size);
+ void zf1_close(zf1_engine *e);
+ 
+ /* Start a new Speak call.  text: UTF-16, len code units (-1 = 0-terminated).
+--- a/src/zf1_ana.c
++++ b/Engine/onecore/zf1_ana.c
+@@ -3,6 +3,11 @@
+ #include <stdlib.h>
+ #include <string.h>
+ 
++/* ClassicVoices patch: function-level scratch is per thread (two voices may speak on two threads at once). */
++#ifndef ZF_TLS
++#define ZF_TLS __thread
++#endif
++
+ int zf1_tok_add(zf1_toklist *l, int off, int len, int entity, const zf_char *cat, uint16_t pos)
+ {
+     if (l->n == l->cap) {
+@@ -477,7 +482,7 @@
+ static int pron_node(zf1_ana *a, int node)
+ {
+     const zf1_node *nd = &a->fr->nd[node];
+-    static uint16_t ph[16][0x182];
++    static ZF_TLS uint16_t ph[16][0x182]; /* ClassicVoices patch: was shared by every engine */
+     int comma[16], n, k;
+     zf_word base;
+     static const zf_char SP[] = {' ', 0};
+--- a/src/zf1_dat.c
++++ b/Engine/onecore/zf1_dat.c
+@@ -3,6 +3,11 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#if defined(__APPLE__) || defined(__unix__)
++#include <sys/mman.h>
++#include <unistd.h>
++#define ZF1_DAT_MMAP 1   /* ClassicVoices patch: map the file read-only (clean, shared pages) instead of a malloc copy */
++#endif
+ 
+ static void walk(zf1_dat *d, size_t o, size_t end, int depth)
+ {
+@@ -39,6 +44,23 @@
+     n = ftell(f);
+     fseek(f, 0, SEEK_SET);
+     if (n <= 0x28) { fclose(f); return -2; }
++#ifdef ZF1_DAT_MMAP
++    {   /* ClassicVoices patch: the loader wants 16 zero bytes after the data; the kernel zero-fills the rest of the
++           last page, so map when at least 16 bytes of it are left, else fall back to the copy below */
++        long pg = sysconf(_SC_PAGESIZE);
++        if (pg > 0 && n % pg != 0 && pg - n % pg >= 16) {
++            void *m = mmap(NULL, (size_t)n, PROT_READ, MAP_PRIVATE, fileno(f), 0);
++            if (m != MAP_FAILED) {
++                fclose(f);
++                d->buf = (uint8_t *)m;
++                d->maplen = (size_t)n;
++                d->size = (size_t)n;
++                walk(d, 0, d->size, 0);
++                return d->nres > 0 ? 0 : -5;
++            }
++        }
++    }
++#endif
+     d->buf = (uint8_t *)malloc((size_t)n + 16);
+     if (!d->buf) { fclose(f); return -3; }
+     if (fread(d->buf, 1, (size_t)n, f) != (size_t)n) { fclose(f); free(d->buf); d->buf = NULL; return -4; }
+@@ -51,6 +73,10 @@
+ 
+ void zf1_dat_free(zf1_dat *d)
+ {
++#ifdef ZF1_DAT_MMAP
++    if (d->maplen) munmap(d->buf, d->maplen);   /* ClassicVoices patch */
++    else
++#endif
+     free(d->buf);
+     memset(d, 0, sizeof *d);
+ }
+@@ -66,3 +92,31 @@
+     if (size) *size = 0;
+     return NULL;
+ }
++
++/* ClassicVoices patch: locale domain lists and a case-tolerant open (see zf1_int.h) */
++static const zf1_domfile DOM_ENGB[] = {
++    {"name", "enGB.Name.dat"}, {"message", "enGB.Message.dat"}, {"computer", "enGB.Computer.dat"},
++    {"address", "EnGB.Address.dat"}, {"companyName", "EnGB.CompanyName.dat"}, {"cityName", "EnGB.CityName.dat"}};
++
++int zf1_domain_files(int lcid, const zf1_domfile **tab)
++{
++    if (lcid == 2057) { *tab = DOM_ENGB; return (int)(sizeof DOM_ENGB / sizeof *DOM_ENGB); }
++    *tab = NULL;
++    return 0;
++}
++
++int zf1_dat_load_ci(zf1_dat *d, char *path)
++{
++    size_t k = strlen(path);
++    int r = zf1_dat_load(d, path);
++    char c;
++    if (r != -1) return r;
++    while (k > 0 && path[k - 1] != '/' && path[k - 1] != '\\') k--;
++    c = path[k];
++    if (c >= 'a' && c <= 'z') path[k] = (char)(c - 32);
++    else if (c >= 'A' && c <= 'Z') path[k] = (char)(c + 32);
++    else return r;
++    r = zf1_dat_load(d, path);
++    path[k] = c;
++    return r;
++}
+--- a/src/zf1_eng.h
++++ b/Engine/onecore/zf1_eng.h
+@@ -18,6 +18,7 @@
+     void *ssctx;
+     void *mod;                          /* zf1_modules.c private state (component objects) */
+     char datdir[1024];                  /* folder of the main .dat (domain files enUS.<Domain>.dat live there); "" = default */
++    int lcid;                           /* ClassicVoices patch: 1033 en-US, 2057 en-GB (picks the domain files) */
+ };
+ 
+ int zf1_modules_init(zf1_engine *e);   /* zf1_modules.c: wires the component modules into e->hooks */
+--- a/src/zf1_engine.c
++++ b/Engine/onecore/zf1_engine.c
+@@ -4,12 +4,21 @@
+ #include <stdlib.h>
+ #include <string.h>
+ 
+-zf1_engine *zf1_open(const char *dat_path)
++zf1_engine *zf1_open(const char *dat_path) { return zf1_open_lcid(dat_path, 1033); }
++
++/* ClassicVoices patch: open by locale (see zf.h) */
++const uint8_t *zf1_resource(const zf1_engine *e, uint32_t id1, uint32_t id2, size_t *size)
+ {
++    return e ? zf1_dat_get(&e->dat, id1, id2, size) : NULL;
++}
++
++zf1_engine *zf1_open_lcid(const char *dat_path, int lcid)
++{
+     zf1_engine *e = (zf1_engine *)calloc(1, sizeof *e);
+     size_t n;
+     const uint8_t *r;
+     if (!e) return NULL;
++    e->lcid = lcid;
+     if (dat_path && strlen(dat_path) < sizeof e->datdir) {
+         size_t k = strlen(dat_path);
+         while (k > 0 && dat_path[k - 1] != '\\' && dat_path[k - 1] != '/') k--;
+--- a/src/zf1_fst.c
++++ b/Engine/onecore/zf1_fst.c
+@@ -14,9 +14,15 @@
+ #include <string.h>
+ #include <stdio.h>
+ 
++/* ClassicVoices patch: function-level scratch is per thread (two voices may speak on two threads at once). */
++#ifndef ZF_TLS
++#define ZF_TLS __thread
++#endif
++
+ int zf1_net_trace = 0;
+-long zf1_net_stat_edges = 0, zf1_net_stat_parses = 0;
+-long long zf1_st_act = 0, zf1_st_comp = 0, zf1_st_gather = 0, zf1_st_term = 0, zf1_st_lex = 0, zf1_st_tree = 0;
++/* ClassicVoices patch: statistics counters per thread (every engine incremented the same globals) */
++ZF_TLS long zf1_net_stat_edges = 0, zf1_net_stat_parses = 0;
++ZF_TLS long long zf1_st_act = 0, zf1_st_comp = 0, zf1_st_gather = 0, zf1_st_term = 0, zf1_st_lex = 0, zf1_st_tree = 0;
+ 
+ /* ------------------------------------------------------------------ character classes (UCRT tables) */
+ static const uint16_t zf_wspace_ranges[] = {0x0009,0x000d,0x0020,0x0020,0x0085,0x0085,0x00a0,0x00a0,0x1680,0x1680,
+@@ -948,8 +954,16 @@
+     int depth;
+     int nalt;
+     int *choice;                        /* per ALT node: chosen child index */
++    long nodes;                         /* ClassicVoices patch: tree nodes built so far (see ZF1_TREE_CAP) */
++    int overflow;                       /* ClassicVoices patch: the cap was hit; the parse gives no result */
+ } zwalk;
+ 
++/* ClassicVoices patch: the result tree unshares the parse forest, so ambiguous inputs grow it exponentially - a
++ * run of 13 digits builds 212k nodes, 15 digits 896k (1.3 GB and seconds), "5555-5555-5555-5555-5555" 1.3M. Above
++ * this many nodes the parse is abandoned as if no consistent path existed (the text is kept as it was, the engine's
++ * own fallback). The largest tree over the upstream's 866 test lines is 30,688 nodes; a 12-digit number 102,943. */
++#define ZF1_TREE_CAP 131072L
++
+ static tnode *tn_new(uint16_t rule)
+ {
+     tnode *t = (tnode *)calloc(1, sizeof(tnode));
+@@ -988,6 +1002,7 @@
+     const uint8_t *lab = NULL;
+     tnode *t = tn_new(rule);
+     zf1_leaf *lf = &t->lf;
++    if (++W->nodes > ZF1_TREE_CAP) W->overflow = 1;   /* ClassicVoices patch */
+     t->leaf = 1;
+     lf->rule = rule; lf->arc = arcid; lf->start = start; lf->end = end;
+     for (o = 0; o < nout; o++) {
+@@ -1052,6 +1067,7 @@
+     int ne1 = (e.c1 != 0) && !is_empty(P, e.c1);
+     int ne2 = !is_empty(P, e.c2);
+     tnode *t = tn_new(e.rule);
++    if (++W->nodes > ZF1_TREE_CAP) W->overflow = 1;   /* ClassicVoices patch */
+     t->cost = e.cost;
+     rule_node(W, t, e.rule, parent_rule);
+     if (ne1 + ne2 == 1) {
+@@ -1089,6 +1105,7 @@
+     int nalt = 0;
+     uint16_t x = id;
+     tnode *t;
++    if (W->overflow) return NULL;   /* ClassicVoices patch: stop building once over ZF1_TREE_CAP */
+     if (++W->depth > 0x200) { W->depth--; return NULL; }
+     while (x != 0xFFFF && x >= P->base) {
+         if (!is_empty(P, x)) nalt++;
+@@ -1096,6 +1113,7 @@
+     }
+     if (nalt > 1) {
+         tnode *a = tn_new(E_OF(P, id)->rule);
++        if (++W->nodes > ZF1_TREE_CAP) W->overflow = 1;   /* ClassicVoices patch */
+         a->alt = 1;
+         a->altid = W->nalt++;
+         x = id;
+@@ -1450,6 +1468,11 @@
+ static void make_result(zwalk *W, uint16_t best)
+ {
+     tnode *root = build440(W, best, 0xFFFF), *m = NULL;
++    if (W->overflow) {   /* ClassicVoices patch: too ambiguous to unfold (ZF1_TREE_CAP): no consistent path */
++        tn_free(root);
++        W->res->nores = 1;
++        return;
++    }
+     if (!root) return;
+     W->choice = (int *)calloc((size_t)W->nalt + 1, sizeof(int));
+     if (W->nalt && has_x2c(W, root)) {
+--- a/src/zf1_int.h
++++ b/Engine/onecore/zf1_int.h
+@@ -29,11 +29,19 @@
+ typedef struct zf1_dat {
+     uint8_t *buf;                       /* whole file (malloc, 8-byte aligned) */
+     size_t size;
++    size_t maplen;                      /* ClassicVoices patch: nonzero = buf is a read-only mmap of this length */
+     int nres;
+     zf1_res res[64];
+ } zf1_dat;
+ 
+ int zf1_dat_load(zf1_dat *d, const char *path);     /* 0 ok, <0 error */
++/* ClassicVoices patch: the domain .dat files of a non-en-US locale (en-GB: MSTTSLocEnGB.INI [Domain], in its order,
++ * named as they are on disk - "EnGB.Address.dat" but "enGB.Name.dat").  Returns the count and sets *tab, or 0 for
++ * en-US and unknown locales (the en-US callers keep the upstream's own lists). */
++typedef struct { const char *domain; const char *file; } zf1_domfile;
++int zf1_domain_files(int lcid, const zf1_domfile **tab);
++/* zf1_dat_load, then (file systems that match case) again with the first letter of the file name's case flipped */
++int zf1_dat_load_ci(zf1_dat *d, char *path);
+ void zf1_dat_free(zf1_dat *d);
+ /* returns payload or NULL (= engine HRESULT 0x8004801A "not present") */
+ const uint8_t *zf1_dat_get(const zf1_dat *d, uint32_t type1, uint32_t id1, size_t *size);
+--- a/src/zf1_lts.c
++++ b/Engine/onecore/zf1_lts.c
+@@ -4,6 +4,11 @@
+ #include <stdlib.h>
+ #include <string.h>
+ 
++/* ClassicVoices patch: function-level scratch is per thread (two voices may speak on two threads at once). */
++#ifndef ZF_TLS
++#define ZF_TLS __thread
++#endif
++
+ /* ---------------- parse ---------------- */
+ static int parse_symtab(const uint8_t *res, size_t size, size_t *pp, uint32_t *n, const uint8_t **off,
+                         const uint8_t **pool)
+@@ -201,7 +206,7 @@
+ {
+     uint16_t L[0x90];
+     int n = 0, pos, i, best;
+-    static cbuf bufs[2];                /* NOT thread safe; engine allocates per call (contents zeroed) */
++    static ZF_TLS cbuf bufs[2];         /* ClassicVoices patch: per thread (was shared by every engine); the engine allocates per call */
+     cbuf *src, *dst;
+     float cand_score[10];
+     zf_char cand[10][0x400];
+--- a/src/zf1_modules.c
++++ b/Engine/onecore/zf1_modules.c
+@@ -9,6 +9,11 @@
+ #include <stdlib.h>
+ #include <string.h>
+ 
++/* ClassicVoices patch: function-level scratch is per thread (two voices may speak on two threads at once). */
++#ifndef ZF_TLS
++#define ZF_TLS __thread
++#endif
++
+ typedef struct zf1_mods {
+     zf1_post post;
+     int post_ok;
+@@ -90,7 +95,7 @@
+ static int hk_sapi_pron(void *ctx, const uint16_t *ids, uint16_t (*ph)[0x182], int *comma, int max)
+ {
+     zf1_mods *m = (zf1_mods *)((zf1_engine *)ctx)->mod;
+-    static zf1_sapiseg seg[16];
++    static ZF_TLS zf1_sapiseg seg[16]; /* ClassicVoices patch: was shared by every engine */
+     int n, k;
+     if (!m->pron_ok) return 0;
+     if (max > 16) max = 16;
+@@ -194,9 +199,9 @@
+     e->hooks.ctx = e;
+     e->hooks.rules = hk_rules;
+     m->pron_ok = zf1_pron_init(&m->pron, &e->dat, &e->lex, &e->ps) == 0;
+-    if (m->pron_ok && m->pron.ndom == 0 && e->datdir[0]) zf1_pron_load_domains(&m->pron, e->datdir);   /* non-default location */
++    if (m->pron_ok && m->pron.ndom == 0 && e->datdir[0]) zf1_pron_load_domains_lcid(&m->pron, e->datdir, e->lcid);   /* non-default location */
+     m->pos_ok = zf1_pos_init(&m->pos, &e->dat, &e->lex) == 0;
+-    if (m->pos_ok) zf1_acro_init(&m->pos, getenv("ZF1_DATDIR") ? getenv("ZF1_DATDIR") : (e->datdir[0] ? e->datdir : NULL));   /* domain .dat files next to the main .dat */
++    if (m->pos_ok) zf1_acro_init_lcid(&m->pos, getenv("ZF1_DATDIR") ? getenv("ZF1_DATDIR") : (e->datdir[0] ? e->datdir : NULL), e->lcid);   /* domain .dat files next to the main .dat */
+     if (m->pos_ok && m->pron_ok) {
+         zf1_pos_set_lookup(&m->pos, zf1_pron_lexlookup_cb, &m->pron);
+         m->pron.posobj = &m->pos;
+--- a/src/zf1_poly.c
++++ b/Engine/onecore/zf1_poly.c
+@@ -885,27 +885,42 @@
+ }
+ 
+ /* ------------------------------------------------------------------------------------------------ domains + acronyms */
+-int zf1_acro_init(zf1_pos *p, const char *datdir)
++int zf1_acro_init(zf1_pos *p, const char *datdir) { return zf1_acro_init_lcid(p, datdir, 1033); }
++
++int zf1_acro_init_lcid(zf1_pos *p, const char *datdir, int lcid)
+ {
+     static const char *const doms[][2] = { { "address", "Address" }, { "name", "Name" }, { "message", "Message" },
+                                             { "media", "Media" }, { "computer", "Computer" },
+                                             { "companyname", "CompanyName" } };
+     polydata *pd = poly_get(p);
+-    size_t i;
++    size_t i, nd = sizeof doms / sizeof *doms;
+     char path[1024];
++    const zf1_domfile *loc;
++    int nloc = zf1_domain_files(lcid, &loc);   /* ClassicVoices patch: a non-en-US locale's own list */
+     if (!pd) return -1;
+     pd->acro_dom = -1;
+     if (!datdir) datdir = "C:\\Windows\\Speech_OneCore\\Engines\\TTS\\en-US\\";
+-    for (i = 0; i < sizeof doms / sizeof *doms && pd->ndom < ZF1_NDOM; i++) {
++    if (nloc) nd = (size_t)nloc;
++    for (i = 0; i < nd && pd->ndom < ZF1_NDOM; i++) {
+         size_t l = strlen(datdir), n = 0;
+         const uint8_t *r;
+         zf1_dat *dd = &pd->domdat[pd->ndom];
+         if (l + 40 >= sizeof path) return -2;
+         memcpy(path, datdir, l);
+         if (l && path[l - 1] != '\\' && path[l - 1] != '/') path[l++] = '/';
+-        sprintf(path + l, "enUS.%s.dat", doms[i][1]);
+-        if (zf1_dat_load(dd, path) != 0) continue;
+-        strcpy(pd->domname[pd->ndom], doms[i][0]);
++        if (nloc) {
++            size_t k;
++            snprintf(path + l, sizeof path - l, "%s", loc[i].file);
++            if (zf1_dat_load_ci(dd, path) != 0) continue;
++            /* the upstream's poly domain names are lower case ("companyname") */
++            for (k = 0; loc[i].domain[k] && k < sizeof pd->domname[0] - 1; k++)
++                pd->domname[pd->ndom][k] = (char)(loc[i].domain[k] >= 'A' && loc[i].domain[k] <= 'Z' ? loc[i].domain[k] + 32 : loc[i].domain[k]);
++            pd->domname[pd->ndom][k] = 0;
++        } else {
++            sprintf(path + l, "enUS.%s.dat", doms[i][1]);
++            if (zf1_dat_load(dd, path) != 0) continue;
++            strcpy(pd->domname[pd->ndom], doms[i][0]);
++        }
+         r = zf1_dat_get(dd, 0xe849e61b, 0x4a3c699e, &n);
+         ruletab_init(&pd->dom[pd->ndom], r, n);
+         r = zf1_dat_get(dd, 0xcea1be6f, 0x0fbd602c, &n);
+--- a/src/zf1_pos.h
++++ b/Engine/onecore/zf1_pos.h
+@@ -105,6 +105,8 @@
+  * domain +0x1b0 matches, pron source 14) and the acronym CRF list (enUS.Address.dat cea1be6f/0fbd602c: SR, ST., ST).
+  * Returns the number of domain files loaded. */
+ int zf1_acro_init(zf1_pos *p, const char *datdir);
++/* ClassicVoices patch: the same for a locale (1033 = zf1_acro_init; 2057: the en-GB domain files) */
++int zf1_acro_init_lcid(zf1_pos *p, const char *datdir, int lcid);
+ /* Analyze step 7a (CAcronymHandler, FUN_180079408), after the domain step and before TN normalization:
+  * entity tokens are re-broken with the word breaker, each token whose domain has an acronym model named by its
+  * upper-cased text is scored; labels with p > 0.6 replace the token text inside the entity Text ("St." ->
+--- a/src/zf1_post.c
++++ b/Engine/onecore/zf1_post.c
+@@ -4,6 +4,11 @@
+ #include <stdlib.h>
+ #include <string.h>
+ 
++/* ClassicVoices patch: function-level scratch is per thread (two voices may speak on two threads at once). */
++#ifndef ZF_TLS
++#define ZF_TLS __thread
++#endif
++
+ /* ------------------------------------------------------------------------------------------------------------
+  * POS table object (sentence+0x2d8 = CTTSEngine vt+0x50): vt+8 name, vt+0x10 class, vt+0x38 default (50).
+  * Values observed at runtime (zftap1_post POSTAB); ids >= 50 -> "unknown", class 0. */
+@@ -225,8 +230,8 @@
+ 
+ static zf_char *u16name(const char *s)
+ {
+-    static zf_char buf[50][24];
+-    static int init;
++    static ZF_TLS zf_char buf[50][24]; /* ClassicVoices patch: per thread (the lazy fill raced between engines) */
++    static ZF_TLS int init;
+     int k, i;
+     if (!init) {
+         for (k = 0; k < 50; k++) {
+--- a/src/zf1_pron.c
++++ b/Engine/onecore/zf1_pron.c
+@@ -118,11 +118,28 @@
+     return p->have_cart ? 0 : -1;
+ }
+ 
+-int zf1_pron_load_domains(zf1_pron *p, const char *dir)
++int zf1_pron_load_domains(zf1_pron *p, const char *dir) { return zf1_pron_load_domains_lcid(p, dir, 1033); }
++
++int zf1_pron_load_domains_lcid(zf1_pron *p, const char *dir, int lcid)
+ {
+     static const char *const names[6] = {"address", "name", "message", "computer", "media", "companyName"};
+     static const char *const files[6] = {"Address", "Name", "Message", "Computer", "Media", "CompanyName"};
+-    int i;
++    const zf1_domfile *loc;
++    int i, nloc = zf1_domain_files(lcid, &loc);
++    for (i = 0; i < nloc && p->ndom < 8; i++) {   /* ClassicVoices patch: a non-en-US locale's own list */
++        char path[1024];
++        size_t n;
++        const uint8_t *r;
++        int k = p->ndom;
++        if (strlen(dir) > 900) return -1;
++        snprintf(path, sizeof path, "%s%s", dir, loc[i].file);
++        if (zf1_dat_load_ci(&p->dom[k].dat, path)) continue;
++        r = zf1_dat_get(&p->dom[k].dat, 0x7bd71f46, 0xf9a99c02, &n);
++        if (!r || zf1_lex_init(&p->dom[k].lex, r, n)) { zf1_dat_free(&p->dom[k].dat); continue; }
++        snprintf(p->dom[k].name, sizeof p->dom[k].name, "%s", loc[i].domain);
++        p->ndom++;
++    }
++    if (nloc) return p->ndom;
+     for (i = 0; i < 6 && p->ndom < 8; i++) {
+         char path[1024];
+         size_t n;
+--- a/src/zf1_pron.h
++++ b/Engine/onecore/zf1_pron.h
+@@ -76,6 +76,8 @@
+ /* load the domain lexicons enUS.{Address,Name,Message,Computer,Media,CompanyName}.dat from dir (the directory of
+  * MSTTSLocEnUS.dat, with trailing separator); zf1_pron_init calls it with the default Windows directory */
+ int zf1_pron_load_domains(zf1_pron *p, const char *dir);
++/* ClassicVoices patch: the same for a locale (1033 = zf1_pron_load_domains; 2057: the en-GB domain files) */
++int zf1_pron_load_domains_lcid(zf1_pron *p, const char *dir, int lcid);
+ /* Adapter for zf1_pos_set_lookup (fork C): writes the attribute sets of all prons, each 0-terminated. */
+ int zf1_pron_netlex_cb(void *ctx, const zf_char *word, int n, uint32_t *pairs, int *counts, int maxitems,
+                        int maxpairs);
+--- a/src/zf1_wb.c
++++ b/Engine/onecore/zf1_wb.c
+@@ -170,14 +170,23 @@
+     size_t sz;
+     const uint8_t *r = zf1_dat_get(d, 0x629aa5c4u, 0x9756c4e5u, &sz), *p, *end;
+     uint32_t nb;
++    int old = 0;
+     memset(wb, 0, sizeof *wb);
+     wb->lang = lang;
++    /* ClassicVoices patch: MSTTSLocEnGB.dat carries only the older version 964f993a of this resource: the same three
++       character tables, then ONE vocabulary trie with no size prefix (no emoticon / fixed-phrase trie: trie1 stays
++       empty and never matches).  Found by reading the en-GB data; not checked against the engine's own reader. */
++    if (!r) {
++        r = zf1_dat_get(d, 0x629aa5c4u, 0x964f993au, &sz);
++        old = 1;
++    }
+     if (!r) return -1;
+     p = r;
+     end = r + sz;
+     wb->n0 = (int)zf_rd32(p); wb->t0 = p + 4; p += 4 + 4 * (size_t)wb->n0;
+     wb->n1 = (int)zf_rd32(p); wb->t1 = p + 4; p += 4 + 4 * (size_t)wb->n1;
+     wb->n2 = (int)zf_rd32(p); wb->t2 = p + 4; p += 4 + 4 * (size_t)wb->n2;
++    if (old) return p + 0x30 <= end && trie_init(&wb->trie0, p, r) == 0 ? 0 : -2;
+     nb = zf_rd32(p);
+     if (trie_init(&wb->trie0, p + 4, r)) return -2;
+     p = p + 4 + ((nb + 3) & ~3u);
+--- a/src/zf2.h
++++ b/Engine/onecore/zf2.h
+@@ -30,6 +30,12 @@
+  * Returns NULL on failure. */
+ zf2_voice *zf2_voice_load(const char *voicepath);
+ void zf2_voice_free(zf2_voice *v);
++/* Attach statistical prosody model runners (Eva); fn(ctx, zf2_sent*, stage 1 breaks / 2 tones / 3 accents). */
++void zf2_voice_set_prosody_hook(zf2_voice *v, void (*fn)(void *ctx, void *sent, int stage), void *ctx);
++/* ClassicVoices patch: take the phone set (ids, names, flags) from the language data's resource 29a5584b/153f1b64
++ * instead of the built-in en-US one (identical to MSTTSLocEnUS.dat's).  Returns 0, or -1 (unchanged) if the
++ * resource is missing or malformed. */
++int zf2_voice_set_phoneset(zf2_voice *v, const uint8_t *res, size_t size);
+ 
+ /* ---- SAPI events produced for one sentence (audio offsets are filled by the backend from durations) ---- */
+ enum { ZF2_EV_WORD = 5, ZF2_EV_PHONEME = 6, ZF2_EV_SENTENCE = 7, ZF2_EV_VISEME = 8, ZF2_EV_BOOKMARK = 4 };
+--- a/src/zf2_feat.c
++++ b/Engine/onecore/zf2_feat.c
+@@ -159,7 +159,7 @@
+     const Z2S *y = &s->s[si];
+     int k, m = 0;
+     for (k = 0; k < y->np; k++) {
+-        int st = s->p[y->p0 + k].st, v = st ? st - Z2_PH_ST1 + 1 : 0;
++        int st = s->p[y->p0 + k].st, v = st ? st - s->v->ps.st1 + 1 : 0;
+         if (v > m) m = v;
+     }
+     return m;
+@@ -337,6 +337,16 @@
+     case L_SENT: return get_sent(s, prop, v);
+     }
+     return -1;
++}
++
++/* the engine matches path tokens case-insensitively (Eva's NNM spells them in lower case) */
++static int z2_icmp(const char *a, const char *b)
++{
++    for (; *a && *b; a++, b++) {
++        int x = (*a >= 'A' && *a <= 'Z') ? *a + 32 : *a, y = (*b >= 'A' && *b <= 'Z') ? *b + 32 : *b;
++        if (x != y) return x - y;
++    }
++    return *a - *b;
+ }
+ 
+ typedef struct { int nstep; int lv[16], dir[16], skip[16]; int prop; } Path;
+@@ -355,11 +365,11 @@
+         tok[n] = 0;
+         if (!e) {
+             for (k = 0; k < (int)(sizeof PROP / sizeof PROP[0]); k++)
+-                if (!strcmp(PROP[k].name, tok)) { p->prop = PROP[k].id; return 0; }
++                if (!z2_icmp(PROP[k].name, tok)) { p->prop = PROP[k].id; return 0; }
+             return -1;
+         }
+         for (k = 0; k < (int)(sizeof LOC / sizeof LOC[0]); k++)
+-            if (!strcmp(LOC[k].name, tok)) break;
++            if (!z2_icmp(LOC[k].name, tok)) break;
+         if (k == (int)(sizeof LOC / sizeof LOC[0]) || p->nstep >= 16) return -1;
+         p->lv[p->nstep] = LOC[k].level;
+         p->dir[p->nstep] = LOC[k].dir;
+--- a/src/zf2_int.h
++++ b/Engine/onecore/zf2_int.h
+@@ -14,8 +14,20 @@
+ #define Z2_MAXPH 48
+ extern const char *const z2_phone_name[Z2_MAXPH];
+ extern const uint32_t z2_phone_flags[Z2_MAXPH];
+-int z2_phone_id(const char *name, int len);       /* -1 unknown */
+ 
++/* ClassicVoices patch: the phone set is per voice (zf2_voice.ps).  Default: the built-in en-US table above; zira_tts
++ * replaces it with the language data's own (zf2_voice_set_phoneset), which for MSTTSLocEnUS.dat is identical.
++ * en-GB (MSTTSLocEnGB.dat) has 49 phones, no -SP-, and its stress / tone marks are ids 4 / 5 instead of 5 / 6. */
++#define Z2_PS_MAX 64
++typedef struct {
++    char name[Z2_PS_MAX][24];   /* "" = no phone with that id */
++    uint32_t flags[Z2_PS_MAX];
++    int sil;                    /* id of -SIL- (3 in both) */
++    int st1;                    /* id of the stress mark '1' */
++    int sp;                     /* id of -SP-, -1 if the set has none */
++} z2_phoneset;
++int z2_phone_id(const z2_phoneset *ps, const char *name, int len);       /* -1 unknown */
++
+ /* pause classes (index into the SilenceLength table 0x180170f00) */
+ enum { Z2_PC_WORD, Z2_PC_INTERM, Z2_PC_PUNCINTERM, Z2_PC_NONPUNCIP, Z2_PC_PARALIP, Z2_PC_PARALLISTIP, Z2_PC_IP, Z2_PC_SENT };
+ 
+@@ -26,11 +38,17 @@
+     int ratio_ne;           /* SilenceLength.RatioNameEntities (100)   = settings+0x30 */
+     int punc_interm_raw;    /* SilenceLength.PuncIntermPhraseBoundary as read (10000 = "not configured") */
+     int short_pause;        /* ShortPause.Enable -> phone set SP id (4) or -1 */
++    int short_pause_on;     /* ClassicVoices patch: ShortPause.Enable as read (short_pause follows the phone set) */
++    z2_phoneset ps;         /* ClassicVoices patch: the voice's phone set */
+     int no_pause;           /* MSTTS.NoPause */
+     /* unit generator / SAPI */
+     int normal_factor;      /* VoiceSetting.MSTTS_SpeakRate_NormalFactor */
+     int phoneme_events_native; /* VoiceSetting.TtsPhonemeEvents */
+     char name[64];
++    /* statistical prosody models (Eva only; NULL for David/Zira/Mark): called after the break rules (1), the
++     * boundary-tone rules (2) and the pitch-accent rules (3), where the engine runs its model runners */
++    void (*prosody_hook)(void *ctx, void *sent, int stage);
++    void *prosody_ctx;
+ };
+ 
+ /* ---- the tree ---- */
+--- a/src/zf2_main.c
++++ b/Engine/onecore/zf2_main.c
+@@ -96,7 +96,18 @@
+     if (v->speak_start < 5) v->speak_start = 5;
+     if (v->speak_end < 5) v->speak_end = 5;
+     v->ratio_ne = ini_int(ini, "SilenceLength", "RatioNameEntities", 100);
+-    v->short_pause = ini_bool(ini, "ShortPause", "Enable", 0) ? Z2_PH_SP : -1;
++    {   /* ClassicVoices patch: start from the built-in en-US phone set (see zf2_voice_set_phoneset) */
++        int i;
++        for (i = 0; i < Z2_MAXPH; i++) {
++            snprintf(v->ps.name[i], sizeof v->ps.name[i], "%s", z2_phone_name[i]);
++            v->ps.flags[i] = z2_phone_flags[i];
++        }
++        v->ps.sil = Z2_PH_SIL;
++        v->ps.st1 = Z2_PH_ST1;
++        v->ps.sp = Z2_PH_SP;
++    }
++    v->short_pause_on = ini_bool(ini, "ShortPause", "Enable", 0);
++    v->short_pause = v->short_pause_on ? v->ps.sp : -1;
+     v->no_pause = ini_int(ini, "MSTTS", "NoPause", 0);
+     v->normal_factor = ini_int(ini, "VoiceSetting", "MSTTS_SpeakRate_NormalFactor", 100);
+     v->phoneme_events_native = ini_int(ini, "VoiceSetting", "TtsPhonemeEvents", 0);
+@@ -113,7 +124,41 @@
+ /* ---- conversion ---- */
+ static int zlen(const zf_char *s) { int n = 0; if (s) while (s[n]) n++; return n; }
+ 
+-static void conv_word(Z2W *d, const zf_word *w, int fragi)
++/* ClassicVoices patch: the phone set from the language data (resource 29a5584b: u32 record size, u32 count, records of
++ * {u16 id, 23 x u16 name, u32 flags at +48}; the layout zf1_phoneset_init reads) */
++int zf2_voice_set_phoneset(zf2_voice *v, const uint8_t *res, size_t size)
++{
++    z2_phoneset ps;
++    uint32_t rs, n, k;
++    if (!v || !res || size < 8) return -1;
++    rs = (uint32_t)res[0] | (uint32_t)res[1] << 8 | (uint32_t)res[2] << 16 | (uint32_t)res[3] << 24;
++    n = (uint32_t)res[4] | (uint32_t)res[5] << 8 | (uint32_t)res[6] << 16 | (uint32_t)res[7] << 24;
++    if (rs < 52 || n == 0 || n > Z2_PS_MAX || 8 + (size_t)rs * n > size) return -1;
++    memset(&ps, 0, sizeof ps);
++    ps.sil = ps.st1 = ps.sp = -1;
++    for (k = 0; k < n; k++) {
++        const uint8_t *r = res + 8 + (size_t)rs * k;
++        unsigned id = (unsigned)r[0] | (unsigned)r[1] << 8;
++        int j;
++        if (id == 0 || id >= Z2_PS_MAX) return -1;
++        for (j = 0; j < 23; j++) {
++            unsigned c = (unsigned)r[2 + 2 * j] | (unsigned)r[3 + 2 * j] << 8;
++            if (!c) break;
++            ps.name[id][j] = (char)c;
++        }
++        ps.name[id][j] = 0;
++        ps.flags[id] = (uint32_t)r[48] | (uint32_t)r[49] << 8 | (uint32_t)r[50] << 16 | (uint32_t)r[51] << 24;
++        if (!strcmp(ps.name[id], "-SIL-")) ps.sil = (int)id;
++        else if (!strcmp(ps.name[id], "1")) ps.st1 = (int)id;
++        else if (!strcmp(ps.name[id], "-SP-")) ps.sp = (int)id;
++    }
++    if (ps.sil < 0 || ps.st1 < 0) return -1;
++    v->ps = ps;
++    v->short_pause = v->short_pause_on ? v->ps.sp : -1;
++    return 0;
++}
++
++static void conv_word(const zf2_voice *v, Z2W *d, const zf_word *w, int fragi)
+ {
+     memset(d, 0, sizeof *d);
+     d->type = w->type;
+@@ -168,7 +213,7 @@
+             while (k < n && w->pron[k] == ' ') k++;
+             while (k < n && w->pron[k] != ' ' && j < 15) nm[j++] = (char)w->pron[k++];
+             if (!j) break;
+-            id = z2_phone_id(nm, j);
++            id = z2_phone_id(&v->ps, nm, j);
+             if (id > 0) d->pron[m++] = (uint16_t)id;
+         }
+         d->npron = m;
+@@ -196,7 +241,7 @@
+         for (f = 0; f < s->nfrag; f++)
+             if (!memcmp(&s->frag[f], &in->words[i].fs, sizeof(zf_fragstate))) break;
+         if (f == s->nfrag) s->frag[s->nfrag++] = in->words[i].fs;
+-        conv_word(&s->w[i], &in->words[i], f);
++        conv_word(v, &s->w[i], &in->words[i], f);
+     }
+     s->nquotes = in->nquotes;
+     if (in->nquotes) {
+@@ -298,3 +343,10 @@
+     for (i = 0; i < s->nph; i++) fprintf(f, "PH %d %d %d par=%d\n", i, s->ph[i].w0, s->ph[i].w1, s->ph[i].ip);
+     for (i = 0; i < s->nip; i++) fprintf(f, "IP %d %d %d\n", i, s->ip[i].ph0, s->ip[i].ph1);
+ }
++
++void zf2_voice_set_prosody_hook(zf2_voice *v, void (*fn)(void *ctx, void *sent, int stage), void *ctx)
++{
++    if (!v) return;
++    v->prosody_hook = fn;
++    v->prosody_ctx = ctx;
++}
+--- a/src/zf2_prosody.c
++++ b/Engine/onecore/zf2_prosody.c
+@@ -250,8 +250,11 @@
+     rule_last(s);
+     rule_tn_silence(s);
+     rule_groups(s);
++    if (s->v && s->v->prosody_hook) s->v->prosody_hook(s->v->prosody_ctx, s, 1);   /* break model runner (BR2) */
+     s->rebuild_flag = 1;
+     rule_tones(s);
++    if (s->v && s->v->prosody_hook) s->v->prosody_hook(s->v->prosody_ctx, s, 2);   /* boundary-tone runner (TON) */
+     rule_list_tones(s);
+     rule_accents(s);
++    if (s->v && s->v->prosody_hook) s->v->prosody_hook(s->v->prosody_ctx, s, 3);   /* pitch-accent runner (ACL) */
+ }
+--- a/src/zf2_tree.c
++++ b/Engine/onecore/zf2_tree.c
+@@ -19,14 +19,14 @@
+ #define PF_TONE 0x20000000u
+ #define PF_SKIP 0x80000000u
+ 
+-int z2_phone_id(const char *name, int len)
+-{
++int z2_phone_id(const z2_phoneset *ps, const char *name, int len)
++{   /* ClassicVoices patch: the voice's phone set */
+     int i;
+-    for (i = 1; i < Z2_MAXPH; i++)
+-        if ((int)strlen(z2_phone_name[i]) == len && len && !strncmp(z2_phone_name[i], name, (size_t)len)) return i;
++    for (i = 1; i < Z2_PS_MAX; i++)
++        if ((int)strlen(ps->name[i]) == len && len && !strncmp(ps->name[i], name, (size_t)len)) return i;
+     return -1;
+ }
+-static uint32_t pflags(int id) { return id > 0 && id < Z2_MAXPH ? z2_phone_flags[id] : 0; }
++static uint32_t pflags(const Z2Sent *s, int id) { return id > 0 && id < Z2_PS_MAX ? s->v->ps.flags[id] : 0; }
+ 
+ /* ---- word predicates ---- */
+ int z2_is_break(const Z2W *w) { return w->type == 3; }
+@@ -63,7 +63,7 @@
+ }
+ int z2_phone_is_sil(const Z2Sent *s, int id)
+ {   /* FUN_18001d540: SIL id (+0x1c) or SP id (+0x1e, -1 when [ShortPause] Enable=false) */
+-    return id == Z2_PH_SIL || (s->v->short_pause >= 0 && id == s->v->short_pause);
++    return id == s->v->ps.sil || (s->v->short_pause >= 0 && id == s->v->short_pause);
+ }
+ int z2_syl_is_sil(const Z2Sent *s, int si)
+ {
+@@ -117,7 +117,7 @@
+     const Z2S *y = &s->s[si];
+     int k, m = 0;
+     for (k = 0; k < y->np; k++) {
+-        int st = s->p[y->p0 + k].st, v = st ? st - Z2_PH_ST1 + 1 : 0;
++        int st = s->p[y->p0 + k].st, v = st ? st - s->v->ps.st1 + 1 : 0;
+         if (v > m) m = v;
+     }
+     return m;
+@@ -139,7 +139,7 @@
+     w->ns = 0;
+     while (i < n) {
+         int j = i, k, first = -1, last = -1;
+-        while (j < n && !(pflags(w->pron[j]) & PF_SYLB)) j++;
++        while (j < n && !(pflags(s, w->pron[j]) & PF_SYLB)) j++;
+         if (j > i) {
+             GROW(s->s, s->ns, s->caps);
+             s->s[s->ns].word = wi;
+@@ -148,7 +148,7 @@
+             s->s[s->ns].tobi = 0;
+             for (k = i; k < j; k++) { /* FUN_18001c4ac */
+                 int id = w->pron[k];
+-                uint32_t f = pflags(id);
++                uint32_t f = pflags(s, id);
+                 /* stress ('1') or tone ('2') mark -> +0x80 of the previous phone; flag 0x80000000 -> +0x82 */
+                 if (f & (PF_STRESS | PF_TONE)) { if (last >= 0) s->p[last].st = id; }
+                 else if (f & PF_SKIP) { if (last >= 0) s->p[last].tone = id; }
+@@ -176,7 +176,7 @@
+ {
+     int sp = s->v->short_pause;
+     if (sp != -1 && s->w[wi].bi != 5 && wi > 0) return sp;
+-    return Z2_PH_SIL;
++    return s->v->ps.sil;
+ }
+ 
+ /* FUN_18001fb2c: the single SIL/SP syllable of a break token */
+--- a/src/zira_tts.c
++++ b/Engine/onecore/zira_tts.c
+@@ -10,7 +10,9 @@
+ #include "zb.h"
+ #include "zf.h"
+ #include "zf2.h"
++#include "eva_voice.h"   /* ClassicVoices addition: Microsoft Eva */
+ 
++#include <math.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -28,10 +30,12 @@
+     zf2_voice *df;
+     zf1_engine *e;
+     int male;                   /* the voice's gender decides whether <lang> switches to David */
++    int lcid;                   /* ClassicVoices patch: the voice's locale (1033 en-US, 2057 en-GB) */
+     ZbSapi sapi;                /* engine-site rate/volume (the emotion is filled in per voice at speak time) */
+     int rate_ext;               /* fast extension: extra per-phone <rate> steps above site rate 10 */
+     int pitch;                  /* offset added to every phone's <pitch middle> */
+     volatile int cancel;
++    EvaModel *eva;              /* ClassicVoices addition: non-NULL for Microsoft Eva (neural back end) */
+ };
+ 
+ static int stricmp_ascii(const char *a, const char *b)
+@@ -45,30 +49,74 @@
+ 
+ const char *zira_tts_voice(const zira_tts *t) { return t ? t->voice : NULL; }
+ 
++/* ClassicVoices patch: locale per voice.  The en-US voices are the upstream's; the en-GB ones (Windows 10 / 11 "Hazel",
++ * "George", "Susan") use the same engine with the en-GB language data MSTTSLocEnGB.dat and its domain files, which sit
++ * next to the en-US files in the same folder (no file names clash).  The locale decides the data file names
++ * (M<lcid><Voice>, MSTTSLoc<xx>.dat, the domain .dat files: zf1_open_lcid) and the phone set of the back half
++ * (read from the language data: zf2_voice_set_phoneset). */
++static const struct { const char *name; int lcid; int male; } VOICES[] = {
++    {"David", 1033, 1}, {"Zira", 1033, 0}, {"Mark", 1033, 1},
++    {"Hazel", 2057, 0}, {"George", 2057, 1}, {"Susan", 2057, 0},
++    {"Eva", 1033, 0},    /* ClassicVoices addition: Microsoft Eva (eva_voice.c) */
++    {"Sarah", 2057, 0}};  /* ClassicVoices addition: Microsoft Sarah, the en-GB neural voice (eva_voice.c) */
++
++int zira_tts_voice_lcid(const char *voice)
++{
++    size_t i;
++    for (i = 0; i < sizeof VOICES / sizeof *VOICES; i++)
++        if (voice && !stricmp_ascii(voice, VOICES[i].name)) return VOICES[i].lcid;
++    return 0;
++}
++
++static const char *lcid_tag(int lcid) { return lcid == 2057 ? "EnGB" : "EnUS"; }
++
+ zira_tts *zira_tts_open(const char *data_dir, const char *voice, char *err, size_t errlen)
+ {
+     zira_tts *t = (zira_tts *)calloc(1, sizeof *t);
+     char vpath[1200], dat[1200];
+-    static const char *const known[3] = {"David", "Zira", "Mark"};
+-    int i;
++    size_t i, n;
++    const uint8_t *ps;
+     if (!t) {
+         if (err) snprintf(err, errlen, "out of memory");
+         return NULL;
+     }
+     snprintf(t->dir, sizeof t->dir, "%s", data_dir && *data_dir ? data_dir : DEF_DIR);
+     snprintf(t->voice, sizeof t->voice, "%s", voice && *voice ? voice : "David");
+-    for (i = 0; i < 3; i++)
+-        if (!stricmp_ascii(t->voice, known[i])) snprintf(t->voice, sizeof t->voice, "%s", known[i]);
++    t->lcid = 1033;
+     t->male = stricmp_ascii(t->voice, "Zira") != 0;
++    for (i = 0; i < sizeof VOICES / sizeof *VOICES; i++)
++        if (!stricmp_ascii(t->voice, VOICES[i].name)) {
++            snprintf(t->voice, sizeof t->voice, "%s", VOICES[i].name);
++            t->lcid = VOICES[i].lcid;
++            t->male = VOICES[i].male;
++        }
+     t->sapi.volume = 100;
+-    snprintf(vpath, sizeof vpath, "%s/M1033%s", t->dir, t->voice);
+-    snprintf(dat, sizeof dat, "%s/MSTTSLocEnUS.dat", t->dir);
++    snprintf(vpath, sizeof vpath, "%s/M%d%s", t->dir, t->lcid, t->voice);
++    snprintf(dat, sizeof dat, "%s/MSTTSLoc%s.dat", t->dir, lcid_tag(t->lcid));
+     t->vb = zb_voice_load(vpath, err, (int)errlen);
+     if (!t->vb) goto fail;
+     t->vf = zf2_voice_load(vpath);
+-    t->e = zf1_open(dat);
++    t->e = zf1_open_lcid(dat, t->lcid);
+     if (!t->vf || !t->e) {
+         if (err) snprintf(err, errlen, "cannot load %s.INI or %s", vpath, dat);
++        goto fail;
++    }
++    /* the back half's phone ids are the language data's (en-US: identical to zf2's built-in table) */
++    ps = zf1_resource(t->e, 0x29a5584bu, 0x153f1b64u, &n);
++    if (zf2_voice_set_phoneset(t->vf, ps, n) < 0) {
++        if (err) snprintf(err, errlen, "bad phone set in %s", dat);
++        goto fail;
++    }
++    if (!stricmp_ascii(t->voice, "Eva") || !stricmp_ascii(t->voice, "Sarah")) {
++        /* ClassicVoices addition: the neural back end (+ Eva's prosody models) */
++        char e2[256];
++        t->eva = eva_model_open(vpath, t->lcid, t->vf, e2, sizeof e2);
++        if (!t->eva) {
++            if (err) snprintf(err, errlen, "%s", e2);
++            goto fail;
++        }
++    } else if (!zb_voice_has_acoustics(t->vb)) {
++        if (err) snprintf(err, errlen, "%s.APM lacks LSF/LF0 models", vpath);
+         goto fail;
+     }
+     return t;
+@@ -80,6 +128,7 @@
+ void zira_tts_close(zira_tts *t)
+ {
+     if (!t) return;
++    if (t->eva) eva_model_close(t->eva);
+     if (t->e) zf1_close(t->e);
+     if (t->vf) zf2_voice_free(t->vf);
+     if (t->vb) zb_voice_free(t->vb);
+@@ -96,8 +145,23 @@
+     if (rate > 20) rate = 20;
+     t->sapi.rate = rate > 10 ? 10 : rate;
+     t->rate_ext = rate > 10 ? rate - 10 : 0;
++    t->sapi.rate_milli = 0;   /* ClassicVoices patch (zira_tts_set_rate_f) */
+ }
+ 
++/* ClassicVoices patch: fractional rate. The whole part exactly as zira_tts_set_rate, the rest (0..999 thousandths
++ * of a step) as ZbSapi.rate_milli. */
++void zira_tts_set_rate_f(zira_tts *t, double rate)
++{
++    long m, whole;
++    if (!(rate == rate)) rate = 0;
++    if (rate < -10) rate = -10;
++    if (rate > 20) rate = 20;
++    m = lrint(rate * 1000.0);
++    whole = m >= 0 ? m / 1000 : -((-m + 999) / 1000);
++    zira_tts_set_rate(t, (int)whole);
++    t->sapi.rate_milli = (int)(m - whole * 1000);
++}
++
+ void zira_tts_set_volume(zira_tts *t, int volume) { t->sapi.volume = volume < 0 ? 0 : volume > 100 ? 100 : volume; }
+ void zira_tts_set_pitch(zira_tts *t, int pitch) { t->pitch = pitch < -10 ? -10 : pitch > 10 ? 10 : pitch; }
+ void zira_tts_cancel(zira_tts *t) { t->cancel = 1; }
+@@ -273,7 +337,21 @@
+         memset(&u, 0, sizeof u);
+         memset(&ev, 0, sizeof ev);
+         memset(&tr, 0, sizeof tr);
+-        if (zf2_process(vf, &s, &u, &ev) == 0 && u.nphone > 0) {
++        if (t->eva && vb == t->vb) {
++            /* ClassicVoices addition: Eva - zf2_process's steps, keeping the sentence tree for the network's
++             * features, then her back end instead of zb_synth */
++            zf2_sent *zs = zf2_run(vf, &s);
++            if (zs && zf2_features(zs, &u) == 0 && zf2_make_events(zs, &ev) == 0 && u.nphone > 0) {
++                apply_controls(t, &u);
++                c->ev = &ev;
++                c->tr = &tr;
++                if (eva_synth(t->eva, vb, zs, &u, &t->sapi, sink, c, &tr) && !c->stopped) rc = -1;
++                c->ev = NULL;
++                c->tr = NULL;
++                zb_trace_free(&tr);
++            }
++            if (zs) zf2_sent_free(zs);
++        } else if (zf2_process(vf, &s, &u, &ev) == 0 && u.nphone > 0) {
+             apply_controls(t, &u);
+             c->ev = &ev;
+             c->tr = &tr;
+@@ -313,7 +391,8 @@
+     /* SAPI hands <lang langid="..."> ... </lang> to the language's default voice as a separate job, keeping the
+        gender: a male voice switches to David, Zira (female) stays herself.  Same rule as zira_say.c. */
+     while (*p && !rc && !t->cancel && !c.stopped) {
+-        char *tag = xml && t->male ? strstr(p, "<lang") : NULL, *piece = p, *end = NULL;
++        /* ClassicVoices patch: only the en-US voices switch to David (his phone set is en-US's) */
++        char *tag = xml && t->male && t->lcid == 1033 ? strstr(p, "<lang") : NULL, *piece = p, *end = NULL;
+         int david = 0;
+         if (tag == p) {
+             char *gt = strchr(p, '>'), *close = gt ? strstr(gt, "</lang>") : NULL;
+@@ -333,6 +412,11 @@
+             snprintf(dp, sizeof dp, "%s/M1033David", t->dir);
+             t->db = zb_voice_load(dp, err, sizeof err);
+             t->df = zf2_voice_load(dp);
++            if (t->df) {
++                size_t n;
++                const uint8_t *ps = zf1_resource(t->e, 0x29a5584bu, 0x153f1b64u, &n);
++                zf2_voice_set_phoneset(t->df, ps, n);
++            }
+         }
+         if (*piece) {
+             ZbVoice *ub = david && t->db ? t->db : t->vb;
+@@ -355,3 +439,11 @@
+     }
+     return rc;
+ }
++
++/* ClassicVoices addition (Mac tools): Eva's prosody models on / off (the rules decide) and label printing */
++int zira_tts_eva_debug(zira_tts *t, int models, int verbose)
++{
++    if (!t || !t->eva) return -1;
++    eva_model_set_debug(t->eva, models, verbose);
++    return 0;
++}
+--- a/src/zira_tts.h
++++ b/Engine/onecore/zira_tts.h
+@@ -67,10 +67,14 @@
+                                <bookmark mark="x"/>, <lang langid="..."> ...  Without this flag the text is
+                                spoken literally (SAPI's SPF_IS_NOT_XML). */
+ 
+-/* voice: "David", "Zira" or "Mark" (case-insensitive; NULL = David).
++/* voice: "David", "Zira" or "Mark" (case-insensitive; NULL = David); ClassicVoices patch: also the en-GB voices
++ * "Hazel", "George" and "Susan", which read M2057<Voice>.{APM,INI,BEP}, MSTTSLocEnGB.dat and the en-GB domain files
++ * from the same data_dir.
+  * data_dir: NULL = C:/Windows/Speech_OneCore/Engines/TTS/en-US. */
+ ZIRA_API zira_tts *zira_tts_open(const char *data_dir, const char *voice, char *err, size_t errlen);
+ ZIRA_API void zira_tts_close(zira_tts *t);
++/* ClassicVoices patch: the locale (LCID) of a voice name: 1033 en-US, 2057 en-GB, 0 unknown. */
++ZIRA_API int zira_tts_voice_lcid(const char *voice);
+ 
+ /* The voice this handle speaks with, and the data folder it was loaded from. */
+ ZIRA_API const char *zira_tts_voice(const zira_tts *t);
+@@ -82,6 +86,9 @@
+  * volume: 0..100 (the engine's -25 dB range curve).
+  * pitch: -10..10, added to the XML <pitch middle> of every phone and clamped there; +-10 = +-5 semitones. */
+ ZIRA_API void zira_tts_set_rate(zira_tts *t, int rate);
++/* ClassicVoices patch: the same scale with fractions (-10..20). Whole values are exactly zira_tts_set_rate; the
++ * fraction goes into the engine's own fine (1/1000 step) rate on the waveform and into the duration rate. */
++ZIRA_API void zira_tts_set_rate_f(zira_tts *t, double rate);
+ ZIRA_API void zira_tts_set_volume(zira_tts *t, int volume);
+ ZIRA_API void zira_tts_set_pitch(zira_tts *t, int pitch);
+ 
+@@ -98,6 +105,10 @@
+ /* thread-safe: stop the current zira_tts_speak as soon as possible (within one audio chunk) */
+ ZIRA_API void zira_tts_cancel(zira_tts *t);
+ 
++/* ClassicVoices addition: Microsoft Eva only - her CRF prosody models on (1, default) or off (0: the rule-based
++ * prosody), and printing the per-word labels to stderr (not in CV_NO_DEBUG_ENV builds).  -1 for other voices. */
++int zira_tts_eva_debug(zira_tts *t, int models, int verbose);
++
+ #ifdef __cplusplus
+ }
+ #endif

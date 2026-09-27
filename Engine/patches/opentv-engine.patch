@@ -1,0 +1,74 @@
+--- a/include/tvtts.h
++++ b/Engine/opentv/include/tvtts.h
+@@ -312,6 +312,14 @@
+  */
+ TVTTS_API void TVTTS_CALL tvtts_set_compat(tvtts_synth *s, int preformat,
+                                            int textin, int terminators);
++
++/*
++ * ClassicVoices patch: Stage 2's process-wide working state (src/engine/stage2.c), saved and restored by the host so
++ * each voice keeps its own. Not thread safe: call under the same lock as every tvtts_speak_*.
++ */
++TVTTS_API size_t TVTTS_CALL tvtts_cv_s2_size(void);
++TVTTS_API void TVTTS_CALL tvtts_cv_s2_save(void *out);
++TVTTS_API void TVTTS_CALL tvtts_cv_s2_load(const void *in);
+ 
+ #ifdef __cplusplus
+ }
+--- a/src/engine/stage2.c
++++ b/Engine/opentv/src/engine/stage2.c
+@@ -612,7 +612,11 @@
+ }
+ 
+ /* The node whose duration is being settled, and the values carried with it. */
+-/* @0x101489f0 */ extern Node *g_s2_node;
++/* ClassicVoices patch: a C global here, not a 4-byte slot of the data image. In the original this is a 32-bit
++ * pointer at 0x101489f0, next to g_s2_total at 0x101489f4; laid out at those offsets, a 64-bit pointer would
++ * overwrite g_s2_total (and g_s2_last, below, g_s2_value). Nothing else ever addresses it, so moving it changes no
++ * table; on 32-bit it behaves exactly as before. */
++Node *g_s2_node;
+ /* @0x101489e8 */ extern int32_t g_s2_b15;
+ /* @0x101489d8 */ extern uint8_t g_s2_value;
+ 
+@@ -1686,7 +1690,7 @@
+  * started, and g_s2_count every node the scan has touched. */
+ /* @0x101489cc */ extern int32_t g_s2_count;
+ /* @0x101489d0 */ extern uint8_t g_s2_voiced;
+-/* @0x101489d4 */ extern Node   *g_s2_last;
++Node   *g_s2_last;   /* ClassicVoices patch: was the image's 4-byte slot at 0x101489d4, see g_s2_node */
+ /* @0x101489dc */ extern int32_t g_s2_run;
+ /* @0x101489e4 */ extern uint8_t g_s2_hold;
+ /* @0x101489f4 */ extern int32_t g_s2_total;
+@@ -4211,3 +4215,32 @@
+         v = g_dur_floor[px(c) * 2];
+     return (v < 3) ? 3 : v;
+ }
++
++/* ClassicVoices patch: Stage 2's working state lives in process globals (above), shared by every synth - in the
++ * original each process loaded its own copy of the DLL, and our old path (tv_enua.dll in the x86 interpreter) gave
++ * every voice its own image. The bridge saves / restores it around each utterance (under one lock), so every voice
++ * keeps its own, starting from the image's initial values, and two voices never mix. */
++struct tvtts_cv_s2 {
++    int32_t state, saved, b15, count, run, total;
++    uint32_t rnd;
++    uint8_t value, voiced, hold;
++    Node *node, *last;
++};
++
++size_t tvtts_cv_s2_size(void) { return sizeof(struct tvtts_cv_s2); }
++
++void tvtts_cv_s2_save(void *out)
++{
++    struct tvtts_cv_s2 *o = (struct tvtts_cv_s2 *)out;
++    o->state = g_s2_state; o->saved = g_s2_saved; o->b15 = g_s2_b15; o->count = g_s2_count; o->run = g_s2_run;
++    o->total = g_s2_total; o->rnd = g_s2_rnd; o->value = g_s2_value; o->voiced = g_s2_voiced; o->hold = g_s2_hold;
++    o->node = g_s2_node; o->last = g_s2_last;
++}
++
++void tvtts_cv_s2_load(const void *in)
++{
++    const struct tvtts_cv_s2 *o = (const struct tvtts_cv_s2 *)in;
++    g_s2_state = o->state; g_s2_saved = o->saved; g_s2_b15 = o->b15; g_s2_count = o->count; g_s2_run = o->run;
++    g_s2_total = o->total; g_s2_rnd = o->rnd; g_s2_value = o->value; g_s2_voiced = o->voiced; g_s2_hold = o->hold;
++    g_s2_node = o->node; g_s2_last = o->last;
++}

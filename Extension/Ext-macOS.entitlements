@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Speech-provider audio unit: sandboxed, no network, no file access beyond its own bundle
+	     (the engines read VoiceData / SAPI4Voices / AnnaVoice from inside the appex). -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- Singing mode (2026-09-25): the app writes the switch, the extension reads it. A Mac app group must start
+	     with the team ID; a team-prefixed group needs no provisioning profile for a Developer ID app. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>ZGJQ5DZFK2.com.quinton.classicvoices</string>
+	</array>
+</dict>
+</plist>

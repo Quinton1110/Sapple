@@ -1,0 +1,260 @@
+name: ClassicVoices
+options:
+  bundleIdPrefix: com.quinton
+  deploymentTarget:
+    iOS: "18.0"
+    macOS: "15.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    DEVELOPMENT_TEAM: ZGJQ5DZFK2
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    # The engines are plain C compiled straight into every target - except the neural voices' Speech SDK (Microsoft's
+    # dylibs, embedded and signed in the extension: see ClassicVoicesExtension below).
+    GCC_C_LANGUAGE_STANDARD: c99
+    # Compiles out the engine's SAM_DEBUG / SAM_NODES stderr dumps (they print the words spoken).
+    GCC_PREPROCESSOR_DEFINITIONS: ["$(inherited)", "CV_NO_DEBUG_ENV=1"]
+    HEADER_SEARCH_PATHS:
+      - "$(SRCROOT)/Engine/sam"
+      - "$(SRCROOT)/Shared/Bridge"
+      - "$(SRCROOT)/Engine/sapi4/lib"
+      - "$(SRCROOT)/Engine/anna"
+      - "$(SRCROOT)/Engine/onecore"
+      - "$(SRCROOT)/Engine/opentv/include"
+    SWIFT_OBJC_BRIDGING_HEADER: Shared/Bridge/ClassicVoices-Bridging-Header.h
+
+# The sources are identical on iOS and macOS: one app target and one AVSpeechSynthesisProvider
+# extension per platform, sharing every Swift and C file. Only the Info.plist, the entitlements and
+# a few platform build settings differ (see the concrete targets below).
+targetTemplates:
+  App:
+    type: application
+    sources:
+      # The Info.plists are per platform and are processed by the build (INFOPLIST_FILE below);
+      # without these excludes they are also COPIED in as resources, and the iOS embedded-binary
+      # validator then reads the macOS one and fails on its unexpanded $(PRODUCT_BUNDLE_IDENTIFIER).
+      - path: App
+        excludes: ["Info.plist", "Info-macOS.plist"]
+      # cv4_bridge.c drives the SAPI 4 engine in the x86 interpreter (SAPI4/emu): the tests' old path, not in the app.
+      - path: Shared
+        excludes: ["Bridge/cv4_bridge.c", "Bridge/cv4_bridge.h"]
+      - path: Engine/sam
+        excludes: ["LICENSE"]
+        compilerFlags: ["-w"]
+      # Microsoft's SAPI 4 engine (msttssyn.dll) decompiled to portable C (the sapi4-decomp library, pinned in NOTICE).
+      # Upstream's flags: C11, -O2, NO floating-point contraction (the original's x87 arithmetic rounds every step; bit for
+      # bit only that way) and no builtins. It reads the DLL's data sections and the voice files from SAPI4Voices at run
+      # time: nothing of Microsoft's is compiled in. (Until 2026-09-27 the DLL itself ran here in SAPI4/emu, the x86
+      # interpreter, now used by the tests only.)
+      - path: Engine/sapi4
+        compilerFlags: ["-w", "-std=c11", "-O2", "-ffp-contract=off", "-fno-builtin", "-I$(SRCROOT)/Engine/sapi4/src",
+                        "-I$(SRCROOT)/Engine/sapi4/port", "-I$(SRCROOT)/Engine/sapi4/lib"]
+      # Microsoft Anna (Vista / 7 TTS20) reconstructed in C99. NEVER contract floating point: its author verified it
+      # exact only without FMA, and its decoder refuses to open otherwise. Its data (AnnaVoice) is bundled in the extension only;
+      # the app reads that copy inside its own bundle (see ClassicEngine.annaDataDir).
+      - path: Engine/anna
+        excludes: ["LICENSE"]
+        compilerFlags: ["-w", "-ffp-contract=off"]
+      # Microsoft David / Zira / Mark, Hazel / George / Susan and Eva (Windows 10 / 11 OneCore) reconstructed in C99. Same rule as Anna: NEVER contract
+      # floating point or use fast-math (bit-exact with the original only that way). Its data (OneCoreVoice) is bundled
+      # in the extension only; the app reads that copy (see ClassicEngine.oneCoreDataDir).
+      - path: Engine/onecore
+        excludes: ["LICENSE"]
+        compilerFlags: ["-w", "-ffp-contract=off", "-fno-fast-math"]
+      # L&H / Centigram TruVoice on OpenTV (github.com/RetroBunn/tv-decomp, pinned in NOTICE): the engine decompiled to
+      # portable C. Upstream's flags: signed arithmetic wraps and no strict aliasing (the decompiled code relies on both),
+      # -O2 as upstream verified it. Its tables are NOT here but in TruVoiceData (below).
+      - path: Engine/opentv
+        excludes: ["LICENSE", "NOTICE", "src/engine.fields"]
+        compilerFlags: ["-w", "-std=gnu11", "-O2", "-fwrapv", "-fno-strict-aliasing", "-I$(SRCROOT)/Engine/opentv/src",
+                        "-I$(SRCROOT)/Engine/opentv/generated"]
+      # TruVoice's tables (Centigram's - voice data: gitignored on main / mac, force-added on the full branches), as the
+      # assembly data image `make truvoice-data` generates from the pinned upstream's data/en/engine.tvdata.
+      - path: TruVoiceData
+        buildPhase: sources   # xcodegen would copy a .s as a resource
+      # Microsoft's voice data (gitignored, never redistributed) - copied verbatim as a folder.
+      - path: VoiceData
+        type: folder
+        buildPhase: resources
+      # Microsoft's SAPI 4 engine DLL + voice data (gitignored; staged and hash-checked by `make -C SAPI4 bundle`): the native
+      # engine reads the DLL's data sections and the .vce / .cfg files from here. TruVoice is no longer in it (OpenTV, above).
+      - path: SAPI4Voices
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.quinton.classicvoices
+        PRODUCT_NAME: ClassicVoices
+        GENERATE_INFOPLIST_FILE: NO
+
+  Extension:
+    type: app-extension
+    sources:
+      - path: Extension
+        excludes: ["Info.plist", "Info-macOS.plist"]   # processed as INFOPLIST_FILE, never a resource
+      # cv4_bridge.c drives the SAPI 4 engine in the x86 interpreter (SAPI4/emu): the tests' old path, not in the app.
+      - path: Shared
+        excludes: ["Bridge/cv4_bridge.c", "Bridge/cv4_bridge.h"]
+      - path: Engine/sam
+        excludes: ["LICENSE"]
+        compilerFlags: ["-w"]
+      - path: Engine/sapi4
+        compilerFlags: ["-w", "-std=c11", "-O2", "-ffp-contract=off", "-fno-builtin", "-I$(SRCROOT)/Engine/sapi4/src",
+                        "-I$(SRCROOT)/Engine/sapi4/port", "-I$(SRCROOT)/Engine/sapi4/lib"]
+      - path: Engine/anna
+        excludes: ["LICENSE"]
+        compilerFlags: ["-w", "-ffp-contract=off"]
+      - path: Engine/onecore
+        excludes: ["LICENSE"]
+        compilerFlags: ["-w", "-ffp-contract=off", "-fno-fast-math"]
+      - path: Engine/opentv
+        excludes: ["LICENSE", "NOTICE", "src/engine.fields"]
+        compilerFlags: ["-w", "-std=gnu11", "-O2", "-fwrapv", "-fno-strict-aliasing", "-I$(SRCROOT)/Engine/opentv/src",
+                        "-I$(SRCROOT)/Engine/opentv/generated"]
+      - path: TruVoiceData
+        buildPhase: sources   # xcodegen would copy a .s as a resource
+      - path: VoiceData
+        type: folder
+        buildPhase: resources
+      - path: SAPI4Voices
+        type: folder
+        buildPhase: resources
+      # Microsoft Anna's voice data (gitignored, never redistributed; hash-checked by `make anna-data`), 39 MB.
+      - path: AnnaVoice
+        type: folder
+        buildPhase: resources
+      # Microsoft David / Zira / Mark's (en-US), Hazel / George / Susan's (en-GB) and Eva's data (gitignored on main / mac, never
+      # redistributed; `make onecore-data`), 43 MB.
+      - path: OneCoreVoice
+        type: folder
+        buildPhase: resources
+      # The neural voices' models (Jenny, Aria, Guy, Sonia, Ryan: Microsoft's Windows 11 natural voices, gitignored on the
+      # code-only branches, never redistributed; staged and hash-checked by tools/neural_stage.py / `make neural-data`), 29 MB.
+      # They share the en-US language data and most domain files with OneCoreVoice (cvn_bridge.c links them).
+      - path: NeuralVoices
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.quinton.classicvoices.Extension
+        PRODUCT_NAME: ClassicVoicesExtension
+        GENERATE_INFOPLIST_FILE: NO
+
+targets:
+  # -- iOS (the shipping targets; names unchanged, the build recipe in README.md uses them) --
+  ClassicVoices:
+    templates: [App]
+    platform: iOS
+    settings:
+      base:
+        TARGETED_DEVICE_FAMILY: "1,2"
+        INFOPLIST_FILE: App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/App.entitlements
+    dependencies:
+      - target: ClassicVoicesExtension
+        embed: true
+
+  ClassicVoicesExtension:
+    templates: [Extension]
+    platform: iOS
+    settings:
+      base:
+        TARGETED_DEVICE_FAMILY: "1,2"
+        INFOPLIST_FILE: Extension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Extension/Ext.entitlements
+    # Microsoft's embedded Speech SDK (the neural voices): three dylibs, NOT linked - cvn_bridge.c dlopens the core one, which
+    # loads the other two from its own folder - but embedded in the appex's Frameworks and signed with our identity (iOS
+    # loads no dylib without a valid signature from the app's team). Microsoft's binaries: NeuralSDK/ is gitignored on the
+    # code-only branches (tools/neural_stage.py stages it).
+    dependencies:
+      - framework: NeuralSDK/ios/libMicrosoft.CognitiveServices.Speech.core.dylib
+        embed: true
+        link: false
+        codeSign: true
+      - framework: NeuralSDK/ios/libMicrosoft.CognitiveServices.Speech.extension.embedded.tts.dylib
+        embed: true
+        link: false
+        codeSign: true
+      - framework: NeuralSDK/ios/libMicrosoft.CognitiveServices.Speech.extension.onnxruntime.dylib
+        embed: true
+        link: false
+        codeSign: true
+
+  # -- macOS --
+  # The appex is embedded in Contents/PlugIns of the app and signed with it; macOS finds the voices
+  # through the app bundle, so the app has to stay where it is put (Applications, say).
+  # Both Mac targets sign MANUALLY with "Developer ID Application: Quinton Williams (ZGJQ5DZFK2)"
+  # so the app can be notarised and run on other people's Macs. Developer ID needs no provisioning
+  # profile for these entitlements (app sandbox only); --timestamp is the secure timestamp the
+  # notary service requires; CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO keeps get-task-allow out (it is
+  # NOT dropped on its own here - measured 2026-09-22: without it the .xcent carried it). Always
+  # check the built binaries with `codesign -d --entitlements -`. A Debug build signs this way too;
+  # for a locally debuggable build pass CODE_SIGN_STYLE=Automatic
+  # CODE_SIGN_INJECT_BASE_ENTITLEMENTS=YES on the xcodebuild command line.
+  ClassicVoices-macOS:
+    templates: [App]
+    platform: macOS
+    settings:
+      base:
+        INFOPLIST_FILE: App/Info-macOS.plist
+        CODE_SIGN_ENTITLEMENTS: App/App-macOS.entitlements
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "Developer ID Application"
+        PROVISIONING_PROFILE_SPECIFIER: ""
+        OTHER_CODE_SIGN_FLAGS: "$(inherited) --timestamp"
+        # Without this Xcode injects com.apple.security.get-task-allow into the signed
+        # entitlements (it does so whenever there is no distribution provisioning profile to
+        # tell it otherwise), and the notary service rejects a binary that carries it.
+        CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+        # The app is the only place the appex can live; keep its name stable for annaDataDir.
+        COMBINE_HIDPI_IMAGES: YES
+    dependencies:
+      - target: ClassicVoicesExtension-macOS
+        embed: true
+        codeSign: true
+
+  ClassicVoicesExtension-macOS:
+    templates: [Extension]
+    platform: macOS
+    settings:
+      base:
+        INFOPLIST_FILE: Extension/Info-macOS.plist
+        CODE_SIGN_ENTITLEMENTS: Extension/Ext-macOS.entitlements
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "Developer ID Application"
+        PROVISIONING_PROFILE_SPECIFIER: ""
+        OTHER_CODE_SIGN_FLAGS: "$(inherited) --timestamp"
+        # Without this Xcode injects com.apple.security.get-task-allow into the signed
+        # entitlements (it does so whenever there is no distribution provisioning profile to
+        # tell it otherwise), and the notary service rejects a binary that carries it.
+        CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+    # The same SDK re-tagged for macOS (tools/neural_stage.py: vtool; Microsoft ships these as iOS binaries), arm64 only -
+    # an Intel Mac lists no neural voices (Voices.swift). Signed with Developer ID like everything else in the bundle; the
+    # hardened runtime's library validation accepts them because the signature is our team's.
+    dependencies:
+      - framework: NeuralSDK/macos/libMicrosoft.CognitiveServices.Speech.core.dylib
+        embed: true
+        link: false
+        codeSign: true
+      - framework: NeuralSDK/macos/libMicrosoft.CognitiveServices.Speech.extension.embedded.tts.dylib
+        embed: true
+        link: false
+        codeSign: true
+      - framework: NeuralSDK/macos/libMicrosoft.CognitiveServices.Speech.extension.onnxruntime.dylib
+        embed: true
+        link: false
+        codeSign: true
+
+schemes:
+  ClassicVoices-macOS:
+    build:
+      targets:
+        ClassicVoices-macOS: all
+    run:
+      config: Debug

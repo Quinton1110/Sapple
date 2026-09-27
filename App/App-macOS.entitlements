@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The Mac app is sandboxed, like Apple's own audio-unit extension template: an AUv3 that
+	     declares sandboxSafe lives in a sandboxed host. It reads nothing but its own bundle.
+	     The SSML capture diagnostic's "group.com.quinton.classicvoices" is iOS-only; here each process
+	     records in its own container. The singing switch uses the team-prefixed group below. -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- Singing mode (2026-09-25): the app writes the switch, the extension reads it. A Mac app group must start
+	     with the team ID; a team-prefixed group needs no provisioning profile for a Developer ID app. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>ZGJQ5DZFK2.com.quinton.classicvoices</string>
+	</array>
+</dict>
+</plist>
