@@ -1,5 +1,5 @@
-Sapple - notices
-================
+Sapple notices
+==============
 
 This project's own code
 -----------------------
@@ -20,26 +20,26 @@ Third-party components
 Each vendored engine is a copy of the library sources of its upstream project at a pinned commit, with this
 project's patches applied (Engine/patches/). The upstream licence files are kept next to the code.
 
-1. Engine/sam - Microsoft SAPI 5 engine (Sam, Mike, Mary), reconstructed in C
+1. Engine/sam: Microsoft SAPI 5 engine (Sam, Mike, Mary), reconstructed in C
    Upstream: https://github.com/KamiKitsune420/ms-sam-mike-mary-decomp
    Pinned:   558ed18d144d83ea831f958116fcf1942075ad75
    Licence:  MIT, Copyright (c) 2026 KamiKitsune420 (Engine/sam/LICENSE)
    Patches:  Engine/patches/classicvoices-engine.patch
 
-2. Engine/anna - Microsoft Anna (Windows Vista / 7, SAPI 5.3 "TTS20" engine), reconstructed in C
+2. Engine/anna: Microsoft Anna (Windows Vista / 7, SAPI 5.3 "TTS20" engine), reconstructed in C
    Upstream: https://github.com/KamiKitsune420/ms-ana-decomp
    Pinned:   a8da0464124fb1ba1a67b0056524bafa4cff4d0d
    Licence:  MIT, Copyright (c) 2026 KamiKitsune420 (Engine/anna/LICENSE)
    Patches:  Engine/patches/anna-engine.patch
 
-3. Engine/onecore - Microsoft OneCore engine (David, Zira, Mark, Hazel, George, Susan), reconstructed in C
+3. Engine/onecore: Microsoft OneCore engine (David, Zira, Mark, Hazel, George, Susan), reconstructed in C
    Upstream: https://github.com/KamiKitsune420/ms-david-zira-decomp
    Pinned:   3009a84894fdb37e1f808469cc97ab25006096e1
    Licence:  MIT, Copyright (c) 2026 KamiKitsune420 (Engine/onecore/LICENSE)
    Patches:  Engine/patches/onecore-engine.patch (includes this project's additions: the neural back end used by Eva
              and Sarah, eva_*.c / eva_*.h, and the en-GB locale support)
 
-4. Engine/opentv - OpenTV, the L&H / Centigram TruVoice engine decompiled to C
+4. Engine/opentv: OpenTV, the L&H / Centigram TruVoice engine decompiled to C
    Upstream: https://github.com/RetroBunn/tv-decomp
    Pinned:   b8897650b9e0dde14f95f67db3937e97858baa41
    Licence:  MIT, Copyright (c) 2026 RetroBunn (Engine/opentv/LICENSE)
@@ -50,7 +50,7 @@ project's patches applied (Engine/patches/). The upstream licence files are kept
              Copyright (c) 2025-2026 Tamas Geczy); no TGSpeechBox code is copied.
    Patches:  Engine/patches/opentv-engine.patch
 
-5. Engine/sapi4 - sapi4-decomp, Microsoft's SAPI 4 engine (msttssyn.dll, 1999) decompiled to C
+5. Engine/sapi4: sapi4-decomp, Microsoft's SAPI 4 engine (msttssyn.dll, 1999) decompiled to C
    Upstream: sapi4-decomp, a separate project by the author of this project (not published)
    Pinned:   ecc002fdfd45812d49126d07e56816a4061c367d
    Licence:  NONE. The upstream project has no licence file, and none is added here. Unmodified.
