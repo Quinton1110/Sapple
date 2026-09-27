@@ -10,15 +10,25 @@ Most of the engines are C reconstructions of the original Windows engines, which
 
 ## Just want to use it?
 
-Pre-built downloads are coming soon: an IPA for the iPhone and iPad, an AltStore source, and a Mac app. Until then you'll need to build it yourself (see below). Once there's an IPA, either of these will install it.
+Ready to install builds are on the downloads page: https://quintonwilliams.me/sapple/
 
-AltStore (stays installed, refreshes itself over Wi-Fi):
+- iPhone and iPad: [Sapple-1.0.ipa](https://quintonwilliams.me/sapple/Sapple-1.0.ipa)
+- Mac, Apple Silicon only: [Sapple-1.0-mac.zip](https://quintonwilliams.me/sapple/Sapple-1.0-mac.zip)
+- AltStore source: `https://quintonwilliams.me/sapple/source.json`
+
+The downloads page lists each file's size and SHA-256.
+
+These builds include voice data that is not part of this repository's code and belongs to its owners: Microsoft (the SAPI 4 and SAPI 5 voices, Anna, the OneCore voices, and the natural voices with the Speech SDK they run on) and Centigram Communications, whose TruVoice later passed to Lernout & Hauspie, ScanSoft and Nuance (the TruVoice tables). It's included for personal accessibility use, isn't covered by Sapple's licence, and will be removed if a rights holder asks.
+
+AltStore, using the source (stays installed, refreshes itself over Wi-Fi, and shows updates):
 
 1. Install AltServer on your Mac or PC from [altstore.io](https://altstore.io/), then use it to put AltStore on your iPhone.
-2. Open AltStore on your iPhone, go to My Apps, tap the plus button, and pick the Sapple IPA.
-3. Sign in with your Apple ID when asked.
-4. Wait for it to install, then open Sapple once.
-5. Keep AltServer running so AltStore can refresh the app before it expires.
+2. In AltStore, go to the Sources screen and tap the plus button.
+3. Paste `https://quintonwilliams.me/sapple/source.json` and add it.
+4. Open the Sapple source, tap Free or Get next to Sapple, and sign in with your Apple ID if asked.
+5. Open Sapple once. Keep AltServer running so AltStore can refresh the app before it expires.
+
+AltStore also installs the IPA directly: download it, then in My Apps tap the plus button and pick the file.
 
 Sideloadly (quick one time install):
 
@@ -30,7 +40,7 @@ Sideloadly (quick one time install):
 
 With a free Apple ID the app stops working after 7 days and has to be reinstalled. A paid Apple Developer account keeps it running for a year.
 
-On the Mac, put Sapple in Applications and open it once so macOS picks up the voices. Leave it there, since macOS finds the voices through the app. The Mac app needs an Apple Silicon Mac; it does not run on an Intel Mac.
+On the Mac, the download is signed and notarized. Unzip it, put Sapple in Applications and open it once so macOS picks up the voices. Leave it there, since macOS finds the voices through the app. The Mac app needs an Apple Silicon Mac; it does not run on an Intel Mac.
 
 ## Picking the voices
 
@@ -96,7 +106,7 @@ tools/        data staging, hash checks, table and patch generators
 - David, Zira, Mark, Hazel, George and Susan (OneCore): engine from [ms-david-zira-decomp](https://github.com/KamiKitsune420/ms-david-zira-decomp) by KamiKitsune420, plus Eva and Sarah, which I added. Voice data by Microsoft.
 - Jenny, Aria, Guy, Sonia and Ryan (Windows 11 natural voices): these run on Microsoft's embedded Speech SDK. Voices and SDK by Microsoft.
 
-None of the voice data, original engine files or SDKs are in this repo, and this project doesn't license them. They belong to their owners.
+None of the voice data, original engine files or SDKs are in this repo, and this project doesn't license them. They belong to their owners. The pre-built downloads on quintonwilliams.me do bundle them, for personal accessibility use, and they will be removed if a rights holder asks.
 
 ## License
 

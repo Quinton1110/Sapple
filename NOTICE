@@ -76,7 +76,12 @@ Voice data, engine binaries and SDKs: NOT included, NOT licensed by this project
 
 The voices themselves are not part of this repository. The voice data, original engine files and SDK libraries
 belong to their respective owners, are not included here, and are not licensed by this project. Nothing in this
-project grants any right to them. Each user must supply their own legitimately obtained copies.
+project grants any right to them. Each user building from source must supply their own legitimately obtained
+copies.
+
+The pre-built downloads hosted at https://quintonwilliams.me/sapple/ (not in this repository) DO bundle this data,
+as listed below, so that the app works on install. It is provided there for personal accessibility use only, it is
+not covered by any licence of this project, and it will be removed on request by a rights holder.
 
 - Microsoft SAPI 5 voices Sam, Mike and Mary, and their lexicons: Microsoft Corporation.
 - Microsoft SAPI 4 engine msttssyn.dll and its voice files: Microsoft Corporation.
