@@ -1,61 +1,64 @@
 # Sapple
 
-Sapple brings the classic and modern Microsoft-era text-to-speech voices to iPhone, iPad and Mac as real system voices.
+The Microsoft-era speech voices, from SAM through the Windows 11 natural voices, as system voices on iPhone, iPad and Mac.
 
-Once installed, the voices show up alongside Apple's own, so you can pick them in VoiceOver, in Spoken Content (Speak Selection and Speak Screen), and in any app that uses the system speech voices. Everything runs on the device, offline. No text you speak is logged or sent anywhere.
+## About
 
-The working name of the app inside the code is still ClassicVoices, and its display name is "Microsoft Voices". A final app name has not been chosen yet.
+Sapple puts the old and not-so-old Windows voices on Apple devices as real system voices, so they work with VoiceOver, Spoken Content and any app that uses the system speech voices. That covers the SAPI 4 and SAPI 5 voices (Sam, Mike, Mary and the rest), the TruVoice voices from Microsoft Agent, Anna from Windows Vista and 7, the Windows 10 and 11 OneCore voices, and the Windows 11 natural voices. Everything runs on the device and works offline.
 
-## The voices
+Most of the engines are C reconstructions of the original Windows engines, which their authors checked against the originals down to the sample. The natural voices run on Microsoft's own Speech SDK. The voice data itself is not in this repository (see About the voices).
 
-The voices span about thirty years of Windows speech:
+## Just want to use it?
 
-- SAM, Mike and Mary, the SAPI 5 voices of Windows 2000 and XP, plus the RoboSoft and Whisper effect voices built on them.
-- The SAPI 4 voices of 1999: all 19 modes of Microsoft's original engine, from Sam to the robot and whisper modes.
-- L&H TruVoice, the voices of Microsoft Agent and BonziBuddy, shown by speaker name (Peter, Sidney and the rest).
-- Microsoft Anna, the voice of Windows Vista and Windows 7.
-- Microsoft David, Zira and Mark, and the British Hazel, George and Susan: the OneCore voices of Windows 10 and 11. The same engine also speaks Eva and Sarah.
-- The Windows 11 natural (neural) voices: Jenny, Aria, Guy, Sonia and Ryan.
+Pre-built downloads are coming soon: an IPA for the iPhone and iPad, an AltStore source, and a Mac app. Until then you'll need to build it yourself (see below). Once there's an IPA, either of these will install it.
 
-Voice names in the picker do not carry the word "Microsoft".
+AltStore (stays installed, refreshes itself over Wi-Fi):
 
-## How it works
+1. Install AltServer on your Mac or PC from [altstore.io](https://altstore.io/), then use it to put AltStore on your iPhone.
+2. Open AltStore on your iPhone, go to My Apps, tap the plus button, and pick the Sapple IPA.
+3. Sign in with your Apple ID when asked.
+4. Wait for it to install, then open Sapple once.
+5. Keep AltServer running so AltStore can refresh the app before it expires.
 
-Each engine is plain C compiled straight into the app. The older engines are faithful reconstructions of the original Windows engines, written in portable C by several decompilation projects (listed in NOTICE), and checked against the originals down to the sample. The app wraps them in an Apple speech synthesis extension (AVSpeechSynthesisProviderAudioUnit), which is what makes them system voices.
+Sideloadly (quick one time install):
 
-The neural voices are different: they run on Microsoft's embedded Speech SDK libraries, which are loaded at run time and are not part of this repository.
+1. Install Sideloadly on your Mac or PC from [sideloadly.io](https://sideloadly.io/).
+2. Connect your iPhone with a cable and open Sideloadly.
+3. Drag the IPA in, enter your Apple ID, and click Start.
+4. On your iPhone, open Settings, then General, then VPN and Device Management, and trust your developer profile.
+5. Open Sapple once.
 
-## Voice data is not included
+With a free Apple ID the app stops working after 7 days and has to be reinstalled. A paid Apple Developer account keeps it running for a year.
 
-This repository contains code only. None of the voice data, engine binaries or SDK libraries are here, and none may be added. They belong to Microsoft, to the successors of Centigram and Lernout & Hauspie, and to their other owners. To build a version that speaks, you need your own legitimately obtained copies, placed in these folders at the top of the repository. All of them are ignored by git.
+On the Mac, put Sapple in Applications and open it once so macOS picks up the voices. Leave it there, since macOS finds the voices through the app.
 
-| Folder | What goes in it | Voices |
-|---|---|---|
-| `VoiceData/` | The SAPI 5 voice files: `Sam.spd`, `Sam.sdf`, `Mike.spd`, `Mike.sdf`, `Mary.spd`, `Mary.sdf`, `LTTS1033.LXA`, `r1033tts.LXA` | SAM, Mike, Mary and the effect voices |
-| `SAPI4Voices/` | The SAPI 4 engine `msttssyn.dll` and its voice files: `sam.vce`, `male.vce`, `female.vce`, `male8.vce`, `female8.vce` with their `.cfg` files | The 19 SAPI 4 voices |
-| `TruVoiceData/` | `tvdata.s`, generated by `make truvoice-data` from the TruVoice engine tables (see below) | The ten TruVoice voices |
-| `AnnaVoice/` | The eleven `M1033DSK.*` files of Microsoft Anna from Windows 7 | Anna |
-| `OneCoreVoice/` | The OneCore voice files from Windows 10 or 11 (`M1033David.*`, `M1033Zira.*`, `M1033Mark.*`, `M2057Hazel.*`, `M2057George.*`, `M2057Susan.*`, Eva's and Sarah's files) and the language data (`MSTTSLocEnUS.dat`, `MSTTSLocEnGB.dat` and the `EnGB.*.dat` / `enGB.*.dat` domain files) | David, Zira, Mark, Hazel, George, Susan, Eva, Sarah |
-| `NeuralVoices/` | The Windows 11 natural voice packages, one folder per voice, plus the key the models need. Staged by `tools/neural_stage.py` | Jenny, Aria, Guy, Sonia, Ryan |
-| `NeuralSDK/` | Microsoft's embedded Speech SDK libraries: `ios/` and `macos/`, three `.dylib` files each. Staged by `tools/neural_stage.py` | Needed by the neural voices |
+## Picking the voices
 
-Each folder has a checker that compares your files against known-good SHA-256 hashes, so you can tell whether your copy is the one the engines were verified against:
+On iPhone and iPad, go to Settings, Accessibility, VoiceOver, Speech, Voice (or Settings, Accessibility, Spoken Content, Voices) and look under English for the Sapple voices. You can also add them to the VoiceOver rotor from the same Speech screen.
 
-- `make -C SAPI4 bundle` checks and stages `SAPI4Voices/` (put the original files in `SAPI4/data/msttsl/` first).
-- `make truvoice-data` generates `TruVoiceData/tvdata.s`. It needs a clone of the OpenTV project at the pinned commit in `Engine/opentv-upstream/` (the exact command is printed if it is missing).
-- `make anna-data` checks `AnnaVoice/`.
-- `make onecore-data` checks `OneCoreVoice/`.
-- `make neural-data` checks `NeuralVoices/` and `NeuralSDK/` after `make neural-stage`.
+On the Mac, the voices show up in VoiceOver Utility under Speech, and in System Settings, Accessibility, Spoken Content, System voice.
 
-The hash lists are in `tools/` and `SAPI4/tools/`. They contain hashes only, never data.
+The Sapple app itself lets you preview every voice and set the speed, and has a singing mode for Sam, Mike and Mary.
 
-## Building
+## Building from source
 
-You need a Mac with Xcode and [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`). The Xcode project is generated from `project.yml` and is not kept in the repository.
+You need a Mac with Xcode and [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`). The Xcode project is generated from `project.yml`. The app targets iOS 18 and macOS 15 and up.
 
-The project has four targets: `ClassicVoices` and `ClassicVoicesExtension` for iPhone and iPad (iOS 18 or later), and `ClassicVoices-macOS` and `ClassicVoicesExtension-macOS` for the Mac (macOS 15 or later).
+The voice data isn't included, so first put your own copies in these folders at the top of the repo. They're all ignored by git.
 
-### With your voice data in place
+```
+VoiceData/      SAPI 5: Sam, Mike, Mary (.spd, .sdf) and the two .LXA lexicons
+SAPI4Voices/    SAPI 4: msttssyn.dll and its .vce / .cfg voice files    (make -C SAPI4 bundle)
+TruVoiceData/   tvdata.s, generated from the TruVoice engine tables        (make truvoice-data)
+AnnaVoice/      Anna: the eleven M1033DSK.* files from Windows 7            (make anna-data)
+OneCoreVoice/   Windows 10 / 11 OneCore voices and language data            (make onecore-data)
+NeuralVoices/   Windows 11 natural voice packages and their model key       (make neural-stage)
+NeuralSDK/      Microsoft's embedded Speech SDK libraries, ios/ and macos/  (make neural-stage)
+```
+
+The make targets stage or check each folder against the SHA-256 lists in `tools/` and `SAPI4/tools/`, so you can tell whether your copy matches the one the engines were checked against.
+
+Then:
 
 ```
 xcodegen generate
@@ -64,36 +67,37 @@ xcodebuild -project ClassicVoices.xcodeproj -scheme ClassicVoices -configuration
   DEVELOPMENT_TEAM=<your team ID> build
 ```
 
-`project.yml` names the original developer's team and bundle identifiers (`com.quinton.classicvoices`) and app group. To sign with your own Apple account, change `DEVELOPMENT_TEAM`, the bundle identifiers and the app group in the entitlements files. The Mac targets sign with a Developer ID certificate; see the comments in `project.yml`.
+To sign with your own account, change `DEVELOPMENT_TEAM`, the bundle identifiers in `project.yml` and the app group in the entitlements files. The Mac targets (`ClassicVoices-macOS`) sign with a Developer ID certificate; the comments in `project.yml` explain.
 
-### Without any voice data (compile check only)
+To check the code compiles without any voice data, run `tools/stub_data.sh` first. It fills the folders with placeholders (empty folders, zeroed TruVoice tables, empty libraries). That build can't speak, so don't install it. `tools/stub_data.sh --clean` removes the placeholders.
 
-The build needs every data folder to exist, and the TruVoice tables and the SDK libraries to link. To check that the code compiles on a clean checkout, fill them with placeholders first:
+The Makefile also builds each engine for the Mac with sanitizers and renders samples, for example `make test`, `make anna-test`, `make onecore-test`, `make truvoice-test`, `make sapi4-test` and `make neural-test`.
+
+Inside the code the project is still called ClassicVoices, and the bundle identifiers are unchanged.
+
+## Project layout
 
 ```
-tools/stub_data.sh
-xcodegen generate
-xcodebuild -project ClassicVoices.xcodeproj -target ClassicVoices -sdk iphonesimulator -arch arm64 \
-  -configuration Debug CODE_SIGNING_ALLOWED=NO build
-tools/stub_data.sh --clean
+App/          the app: voice list, preview, speed, singing, self-test
+Extension/    the speech synthesis extension that registers the voices with the system
+Shared/       code both use: voice list, SSML, rate and pitch, one C bridge per engine
+Engine/       the engines, vendored from their upstream projects, with our patches in Engine/patches/
+SAPI4/        an x86 interpreter that runs the original SAPI 4 DLLs, kept as the reference for testing
+Tests/        SSML and pause tests
+tools/        data staging, hash checks, table and patch generators
 ```
 
-The placeholders are empty folders, zero-filled TruVoice tables and empty libraries. A build made this way cannot speak with those voices. Never install or share one. `--clean` removes only the placeholders the script created.
+## About the voices
 
-### Tests on the Mac
+- SAM, Mike and Mary (SAPI 5): engine from [ms-sam-mike-mary-decomp](https://github.com/KamiKitsune420/ms-sam-mike-mary-decomp) by KamiKitsune420. Voice data by Microsoft.
+- The SAPI 4 voices: Microsoft's 1999 engine `msttssyn.dll`, decompiled to C in a separate project of mine, sapi4-decomp. The engine still reads its data from the original DLL and voice files, which are Microsoft's.
+- TruVoice (the Microsoft Agent voices): engine from [OpenTV](https://github.com/RetroBunn/tv-decomp) by RetroBunn. The engine tables are Centigram's, whose TruVoice business went to Lernout & Hauspie and later ScanSoft / Nuance.
+- Anna: engine from [ms-ana-decomp](https://github.com/KamiKitsune420/ms-ana-decomp) by KamiKitsune420. Voice data by Microsoft.
+- David, Zira, Mark, Hazel, George and Susan (OneCore): engine from [ms-david-zira-decomp](https://github.com/KamiKitsune420/ms-david-zira-decomp) by KamiKitsune420, plus Eva and Sarah, which I added. Voice data by Microsoft.
+- Jenny, Aria, Guy, Sonia and Ryan (Windows 11 natural voices): these run on Microsoft's embedded Speech SDK. Voices and SDK by Microsoft.
 
-The `Makefile` builds each engine and its bridge for the Mac exactly as the app compiles them, with sanitizers, and renders sample audio. For example `make test`, `make anna-test`, `make onecore-test`, `make truvoice-test`, `make sapi4-test`, `make neural-test` and `make ssml-test`. Each needs the matching voice data.
+None of the voice data, original engine files or SDKs are in this repo, and this project doesn't license them. They belong to their owners.
 
-## Repository layout
+## License
 
-- `App/` The app: voice picker, preview, settings and a self-test.
-- `Extension/` The speech synthesis extension that registers the voices with the system.
-- `Shared/` Swift and C shared by both: the voice list, SSML handling, rate and pitch, and one C bridge per engine (`Shared/Bridge/`).
-- `Engine/` The engines, vendored from their upstream projects with this project's patches (`Engine/patches/`), plus Mac test programs (`Engine/test/`).
-- `SAPI4/` An x86 interpreter and small Windows shim that can run the original SAPI 4 engine DLLs. The app no longer uses it; it remains as the reference the C engines are compared against.
-- `Tests/` SSML parser and pause tests.
-- `tools/` Data staging, hash checks, patch and table generators.
-
-## Licence
-
-No licence has been chosen for this project's own code yet. All rights reserved pending a licence decision. The vendored engines keep their own licences. See NOTICE for every third-party component, its origin and its licence, and for the ownership of the voice data.
+No license has been picked for Sapple's own code yet, so for now it's all rights reserved. The vendored engines keep their own licenses (MIT for the four from GitHub; sapi4-decomp has none yet). NOTICE has the details, including the pinned upstream commits.
