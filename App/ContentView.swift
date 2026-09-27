@@ -142,7 +142,7 @@ struct ContentView: View {
                     }
                 }
             }
-            .navigationTitle("Microsoft Voices")
+            .navigationTitle("Sapple")
         }
 #if os(macOS)
         // A Mac window has no natural size; the form needs room for the picker and the text editor.
