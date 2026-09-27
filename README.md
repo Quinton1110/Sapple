@@ -30,6 +30,8 @@ AltStore, using the source (stays installed, refreshes itself over Wi-Fi, and sh
 
 AltStore also installs the IPA directly: download it, then in My Apps tap the plus button and pick the file.
 
+SideStore reads the same source. Add it in SideStore the same way. SideStore refreshes apps on the phone itself, so after its one time setup you don't need a computer to keep Sapple running.
+
 Sideloadly (quick one time install):
 
 1. Install Sideloadly on your Mac or PC from [sideloadly.io](https://sideloadly.io/).
