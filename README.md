@@ -18,7 +18,7 @@ Ready to install builds are on the downloads page: https://quintonwilliams.me/sa
 
 The downloads page lists each file's size and SHA-256.
 
-These builds include voice data that is not part of this repository's code and belongs to its owners: Microsoft (the SAPI 4 and SAPI 5 voices, Anna, the OneCore voices, and the natural voices with the Speech SDK they run on) and Centigram Communications, whose TruVoice later passed to Lernout & Hauspie, ScanSoft and Nuance (the TruVoice tables). It's included for personal accessibility use, isn't covered by Sapple's licence, and will be removed if a rights holder asks.
+These builds include voice data that is not part of this repository's code and belongs to its owners: Microsoft (the SAPI 4 and SAPI 5 voices, Anna, the OneCore voices, and the natural voices with the Speech SDK they run on) and Centigram Communications, whose TruVoice later passed to Lernout & Hauspie, ScanSoft and Nuance (the TruVoice tables). It's included for personal use, isn't covered by Sapple's licence, and will be removed if a rights holder asks.
 
 AltStore, using the source (stays installed, refreshes itself over Wi-Fi, and shows updates):
 
@@ -108,7 +108,7 @@ tools/        data staging, hash checks, table and patch generators
 - David, Zira, Mark, Hazel, George and Susan (OneCore): engine from [ms-david-zira-decomp](https://github.com/KamiKitsune420/ms-david-zira-decomp) by KamiKitsune420, plus Eva and Sarah, which I added. Voice data by Microsoft.
 - Jenny, Aria, Guy, Sonia and Ryan (Windows 11 natural voices): these run on Microsoft's embedded Speech SDK. Voices and SDK by Microsoft.
 
-None of the voice data, original engine files or SDKs are in this repo, and this project doesn't license them. They belong to their owners. The pre-built downloads on quintonwilliams.me do bundle them, for personal accessibility use, and they will be removed if a rights holder asks.
+None of the voice data, original engine files or SDKs are in this repo, and this project doesn't license them. They belong to their owners. The pre-built downloads on quintonwilliams.me do bundle them, for personal use, and they will be removed if a rights holder asks.
 
 ## License
 

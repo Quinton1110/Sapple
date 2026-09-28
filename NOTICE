@@ -80,7 +80,7 @@ project grants any right to them. Each user building from source must supply the
 copies.
 
 The pre-built downloads hosted at https://quintonwilliams.me/sapple/ (not in this repository) DO bundle this data,
-as listed below, so that the app works on install. It is provided there for personal accessibility use only, it is
+as listed below, so that the app works on install. It is provided there for personal use only, it is
 not covered by any licence of this project, and it will be removed on request by a rights holder.
 
 - Microsoft SAPI 5 voices Sam, Mike and Mary, and their lexicons: Microsoft Corporation.
