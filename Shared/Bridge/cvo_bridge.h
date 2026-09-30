@@ -1,4 +1,5 @@
-/* ClassicVoices OneCore bridge: Microsoft David, Zira and Mark (en-US) and Hazel, George and Susan (en-GB) - the
+/* ClassicVoices OneCore bridge: Microsoft David, Zira and Mark (en-US), Hazel, George and Susan (en-GB), Catherine and
+ * James (en-AU), Linda and Richard (en-CA), the neural Eva (en-US), Sarah (en-GB) and Matilda (en-AU) - the
  * Windows 10 / 11 "OneCore" voices, Engine/onecore -
  * behind the same shape as cv_bridge.h / cv4_bridge.h / cva_bridge.h, so Swift drives every engine alike:
  *   - the same text sanitizer (cv_sanitize_alloc), then plain text (never SAPI XML: "<rate>" is read, not obeyed);
@@ -20,7 +21,8 @@ extern "C" {
 typedef struct cvo_voice cvo_voice;
 
 /* data_dir: flat folder with MSTTSLocEnUS.dat and M1033<voice>.{APM,BEP,INI} (en-US), MSTTSLocEnGB.dat and
- * M2057<voice>.{APM,INI,BEP} (en-GB) and the domain files; voice: "David", "Zira", "Mark", "Hazel", "George", "Susan".
+ * M2057<voice>.{APM,INI,BEP} (en-GB) and the domain files; voice: "David", "Zira", "Mark", "Hazel", "George", "Susan", "Eva", "Sarah",
+ * "Catherine", "James", "Matilda" (M3081<voice>.*, MSTTSLocEnAU.dat), "Linda", "Richard" (M4105<voice>.*, MSTTSLocEnCA.dat).
  * NULL and err filled on failure (missing data, unknown voice). */
 cvo_voice *cvo_voice_open(const char *data_dir, const char *voice, char *err, size_t errlen);
 void cvo_voice_close(cvo_voice *v);

@@ -58,7 +58,12 @@ static const struct { const char *name; int lcid; int male; } VOICES[] = {
     {"David", 1033, 1}, {"Zira", 1033, 0}, {"Mark", 1033, 1},
     {"Hazel", 2057, 0}, {"George", 2057, 1}, {"Susan", 2057, 0},
     {"Eva", 1033, 0},    /* ClassicVoices addition: Microsoft Eva (eva_voice.c) */
-    {"Sarah", 2057, 0}};  /* ClassicVoices addition: Microsoft Sarah, the en-GB neural voice (eva_voice.c) */
+    {"Sarah", 2057, 0},   /* ClassicVoices addition: Microsoft Sarah, the en-GB neural voice (eva_voice.c) */
+    /* ClassicVoices addition (2026-09-29): the other English OneCore voices, from the Windows 11 Languages and Optional
+     * Features image: en-AU Catherine / James, en-CA Linda / Richard (en-IN Heera / Ravi and en-IE Sean need multi-band
+     * excitation and larger LSF models the reconstruction does not have) */
+    {"Catherine", 3081, 0}, {"James", 3081, 1}, {"Linda", 4105, 0}, {"Richard", 4105, 1},
+    {"Matilda", 3081, 0}};  /* ClassicVoices addition (2026-09-30): Microsoft Matilda, the en-AU neural voice (eva_voice.c) */
 
 int zira_tts_voice_lcid(const char *voice)
 {
@@ -68,7 +73,15 @@ int zira_tts_voice_lcid(const char *voice)
     return 0;
 }
 
-static const char *lcid_tag(int lcid) { return lcid == 2057 ? "EnGB" : "EnUS"; }
+static const char *lcid_tag(int lcid)
+{
+    switch (lcid) {
+    case 2057: return "EnGB";
+    case 3081: return "EnAU";
+    case 4105: return "EnCA";
+    default: return "EnUS";
+    }
+}
 
 zira_tts *zira_tts_open(const char *data_dir, const char *voice, char *err, size_t errlen)
 {
@@ -107,7 +120,7 @@ zira_tts *zira_tts_open(const char *data_dir, const char *voice, char *err, size
         if (err) snprintf(err, errlen, "bad phone set in %s", dat);
         goto fail;
     }
-    if (!stricmp_ascii(t->voice, "Eva") || !stricmp_ascii(t->voice, "Sarah")) {
+    if (!stricmp_ascii(t->voice, "Eva") || !stricmp_ascii(t->voice, "Sarah") || !stricmp_ascii(t->voice, "Matilda")) {
         /* ClassicVoices addition: the neural back end (+ Eva's prosody models) */
         char e2[256];
         t->eva = eva_model_open(vpath, t->lcid, t->vf, e2, sizeof e2);

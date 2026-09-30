@@ -9,8 +9,9 @@
 //   - TruVoice voices: Engine/opentv (OpenTV, the TruVoice engine decompiled to C; its tables linked in from
 //     TruVoiceData/tvdata.s) + cvt_bridge.c. Until 2026-09-26 they ran as L&H's tv_enua.dll in the SAPI 4 interpreter.
 //   - Microsoft Anna: Engine/anna (the Vista / 7 TTS20 engine reconstructed in C) + cva_bridge.c, data AnnaVoice
-//   - Microsoft David / Zira / Mark (en-US) and Hazel / George / Susan (en-GB): Engine/onecore (the Windows 10 / 11 OneCore
-//     engine reconstructed in C) + cvo_bridge.c, data OneCoreVoice (both languages' files in the one folder); the emotion
+//   - Microsoft David / Zira / Mark (en-US), Hazel / George / Susan (en-GB), Catherine / James (en-AU), Linda / Richard
+//     (en-CA) and the neural Eva (en-US), Sarah (en-GB) and Matilda (en-AU): Engine/onecore (the Windows 10 / 11 OneCore
+//     engine reconstructed in C) + cvo_bridge.c, data OneCoreVoice (every language's files in the one folder); the emotion
 //     presets share their voice's handle (the emotion is set per utterance)
 //   - Jenny / Aria / Guy (en-US) and Sonia / Ryan (en-GB), the Windows 11 Narrator natural voices: Microsoft's embedded
 //     Speech SDK (the dylibs in NeuralSDK, embedded in the extension's Frameworks and loaded with dlopen) + cvn_bridge.c,

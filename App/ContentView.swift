@@ -35,7 +35,7 @@ struct ContentView: View {
                                 Text(v.display).tag(i)
                             }
                         }
-                        Section("Windows 10") {   // Microsoft David, Zira and Mark, plain and in their emotion presets; Hazel, George, Susan
+                        Section("Windows 10") {   // Microsoft David, Zira and Mark, plain and in their emotion presets; Hazel, George, Susan; Catherine, James, Linda, Richard, Matilda
                             ForEach(Array(CLASSIC_VOICES.enumerated()).filter { $0.element.engine == .onecore }, id: \.offset) { i, v in
                                 Text(v.display).tag(i)
                             }

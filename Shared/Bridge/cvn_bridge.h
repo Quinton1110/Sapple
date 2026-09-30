@@ -1,4 +1,4 @@
-/* ClassicVoices neural bridge: Jenny, Aria and Guy (en-US), Sonia and Ryan (en-GB) - the Windows 11 Narrator "natural"
+/* ClassicVoices neural bridge: Jenny, Aria and Guy (en-US), Sonia and Ryan (en-GB), Neerja and Prabhat (en-IN) - the Windows 11 Narrator "natural"
  * voices, on Microsoft's own embedded (offline) Speech SDK engine, 1.33 (the three dylibs in NeuralSDK/, loaded at run
  * time with dlopen; nothing of the SDK is linked at build time) - behind the same shape as cv_bridge.h / cvo_bridge.h,
  * so Swift drives every engine alike:
@@ -28,12 +28,12 @@ typedef struct cvn_voice cvn_voice;
 
 /* sdk_dir: folder with libMicrosoft.CognitiveServices.Speech.{core,extension.embedded.tts,extension.onnxruntime}.dylib
  *   (the platform's build: iOS or macOS); loaded once per process, the first time any voice opens.
- * data_dir: NeuralVoices/ - one folder per voice (Jenny/, Aria/, Guy/, Sonia/, Ryan/: the voice's models, INIs,
- *   Tokens.xml), en-GB/ (the en-GB voices' language data) and model.key (the key the voice models are encrypted with).
+ * data_dir: NeuralVoices/ - one folder per voice (Jenny/, Aria/, Guy/, Sonia/, Ryan/, Neerja/, Prabhat/: the voice's
+ *   models, INIs, Tokens.xml), en-GB/ and en-IN/ (those voices' language data) and model.key (the key the voice models are encrypted with).
  * onecore_dir: OneCoreVoice/ - the en-US language data and the domain files both voice families share, byte for byte.
  * work_dir: a writable folder (the extension's Caches): per voice, a folder of links to those files, since the engine reads
  *   a voice from one folder (rebuilt the first time a voice opens in a process: an app update moves the bundle).
- * voice: "Jenny", "Aria", "Guy", "Sonia", "Ryan". NULL and err filled on failure. */
+ * voice: "Jenny", "Aria", "Guy", "Sonia", "Ryan", "Neerja", "Prabhat". NULL and err filled on failure. */
 cvn_voice *cvn_voice_open(const char *sdk_dir, const char *data_dir, const char *onecore_dir, const char *work_dir,
                           const char *voice, char *err, size_t errlen);
 void cvn_voice_close(cvn_voice *v);

@@ -161,14 +161,15 @@ anna-bench: build/mac/anna_test
 
 .PHONY: anna-data anna-test anna-tsan anna-bench
 
-# Microsoft David, Zira and Mark (en-US), Hazel, George and Susan (en-GB) and the neural Eva (en-US) and Sarah (en-GB) (Engine/onecore, the ms-david-zira-decomp
+# Microsoft David, Zira and Mark (en-US), Hazel, George and Susan (en-GB), Catherine and James (en-AU), Linda and Richard (en-CA)
+# and the neural Eva (en-US), Sarah (en-GB) and Matilda (en-AU) (Engine/onecore, the ms-david-zira-decomp
 # reconstruction of the Windows 10 / 11 OneCore engine, with our locale patch) and their bridge, exactly as the iOS targets compile them. Like Anna: NEVER contract floating point
 # (-ffp-contract=off, no fast-math) - its author verified it bit-exact with the original only that way.
 #   make onecore-data    hash-check OneCoreVoice/ (tools/onecore_data.sha256) + structural checks (tools/onecore_integrity.py)
-#   make onecore-test    engine + bridge under ASan/UBSan, all eight voices: locale / phone-set / British-pronunciation checks,
+#   make onecore-test    engine + bridge under ASan/UBSan, all thirteen voices: locale / phone-set / British-pronunciation checks,
 #                        sentences, emotions, hostile text, rate/pitch, trim, cancel, state, 60 utterances, threads;
 #                        WAVs in samples/onecore-test
-#   make onecore-tsan    two voices on two threads under ThreadSanitizer (eight pairs, both locales, Eva and Sarah included)
+#   make onecore-tsan    two voices on two threads under ThreadSanitizer (nine pairs, Eva, Sarah and Matilda included)
 #   make onecore-bench   open time, first-audio latency, real-time factor, memory per open voice (plain -O2 build)
 ONECOREBRIDGE = Shared/Bridge/cvo_bridge.c Shared/Bridge/cv_resample.c Shared/Bridge/cv_bridge.c
 ONECOREFLAGS = -std=c99 -ffp-contract=off -fno-fast-math -Wall -Wno-unused-parameter -Wno-unused-function \
@@ -344,7 +345,7 @@ sapi4-ab: build/mac/sapi4_ab_old build/mac/sapi4_ab_new
 
 .PHONY: sapi4-test sapi4-tsan sapi4-bench sapi4-ab
 
-# The neural voices - Jenny, Aria, Guy (en-US), Sonia, Ryan (en-GB), the Windows 11 natural voices on Microsoft's embedded
+# The neural voices - Jenny, Aria, Guy (en-US), Sonia, Ryan (en-GB), Neerja, Prabhat (en-IN), the Windows 11 natural voices on Microsoft's embedded
 # Speech SDK (NeuralSDK/macos: the iOS dylibs re-tagged for macOS, the same arm64 code) - through cvn_bridge.c exactly as the
 # iOS targets compile it (Engine/test/neural_test.c).
 #   make neural-stage    stage NeuralVoices/ + NeuralSDK/ from ~/code/NeuralVoice (tools/neural_stage.py: Appx signatures, block

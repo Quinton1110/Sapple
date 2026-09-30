@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Stages the neural voices (Jenny, Aria, Guy, Sonia, Ryan) and Microsoft's embedded Speech SDK for the app:
+"""Stages the neural voices (Jenny, Aria, Guy, Sonia, Ryan, Neerja, Prabhat) and Microsoft's embedded Speech SDK for the app:
 
   NeuralVoices/<Voice>/   the voice's own files (models, INIs, Tokens.xml, phones / punctuation tables)
   NeuralVoices/en-GB/     the en-GB voices' language data (identical in Sonia's and Ryan's packages; their 23 MB
                           MSTTSLocEnUS.dat is left out, see EN_GB_LEFT_OUT)
+  NeuralVoices/en-IN/     the en-IN voices' language data (MSTTSLocEnIN.dat + its four domain files, identical in
+                          Neerja's and Prabhat's packages; OneCoreVoice has no en-IN data)
   NeuralVoices/model.key  the key the voice models are encrypted with
   NeuralSDK/ios/          the three SDK dylibs as the NeuralVoice app bundled them (arm64, iOS)
   NeuralSDK/macos/        the same three, re-tagged for macOS (vtool) and ad-hoc signed (Xcode signs them again)
@@ -13,6 +15,9 @@ Source: ~/code/NeuralVoice (Quinton's earlier neural voice app), or the folder g
     natural-voice packages (Microsoft Store Appx), unpacked
   MicrosoftSpeechSDK/*.dylib                                  - Speech SDK 1.33 embedded TTS for iOS
   Extension/Bridge/MSTTSBridge.c                              - holds the model key (MSTTS_MODEL_KEY)
+Neerja and Prabhat (en-IN) are not in NeuralVoice: they come from the two .Msix packages in
+_installers/neural-store/older/ (see MSIX below: the NVDA community mirror dl.nvdacn.com, NOT Microsoft's servers - which is
+why the Microsoft signature and block-map checks matter), unzipped into build/neural-stage/ and checked the same way.
 
 Checked before anything is copied (nothing is ever run):
   - each package's AppxSignature.p7x verifies (openssl smime -verify -noverify: the signature over its content; the
@@ -24,11 +29,22 @@ Checked before anything is copied (nothing is ever run):
 The Appx metadata (block map, signature, manifest) goes to _installers/neural/<package>/ (gitignored, not bundled).
 Everything staged is Microsoft's: gitignored on the code-only branches, force-added on the full branches only.
 Writes tools/neural_data.sha256 when run with --record; otherwise compares with it."""
-import base64, glob, hashlib, os, re, shutil, subprocess, sys, xml.etree.ElementTree as ET
+import base64, glob, hashlib, os, re, shutil, subprocess, sys, zipfile, xml.etree.ElementTree as ET
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VOICES = [("Jenny", "en-US", "1033.INI"), ("Aria", "en-US", "1033.INI"), ("Guy", "en-US", "1033.INI"),
-          ("Sonia", "en-GB", "2057.INI"), ("Ryan", "en-GB", "2057.INI")]
+          ("Sonia", "en-GB", "2057.INI"), ("Ryan", "en-GB", "2057.INI"),
+          ("Neerja", "en-IN", "1081.INI"), ("Prabhat", "en-IN", "1081.INI")]
+# The en-IN packages (1.0.5.0 / 1.0.2.0, 2023, token names TTS_MS_Apollo_en-IN_*Neural_11.0, no "LicenseVersion"): from the
+# NVDA community mirror dl.nvdacn.com (listed on the NaturalVoiceSAPIAdapter wiki), not from Microsoft's servers. The SHA-256
+# of each .Msix as downloaded; then the Appx signature and block map checks below, as for every package. (The 2025 Store
+# packages in _installers/neural-store/ are encrypted with another key and are NOT used.)
+MSIX_DIR = os.path.join("_installers", "neural-store", "older")
+MSIX = {"Neerja": ("MicrosoftWindows.Voice.en-IN.Neerja.1_1.0.5.0_x64__cw5n1h2txyewy.Msix",
+                   "3d7061ac001c7fe7b9a9656c7681b956f900361cc562562f55f7f37cbe815fc1"),
+        "Prabhat": ("MicrosoftWindows.Voice.en-IN.Prabhat.1_1.0.2.0_x64__cw5n1h2txyewy.Msix",
+                    "d18ac6c623dd0d5d37b91e9ab370cc3910cb0d68bcf2b1f702f0173ce3070358")}
+EN_IN_SHARED = ["MSTTSLocEnIN.dat", "EnIN.address.dat", "EnIN.computer.dat", "EnIN.message.dat", "EnIN.name.dat"]
 # name in the package -> name in OneCoreVoice/ (cvn_bridge.c links them under the package's name)
 ONECORE_EN_US = {"MSTTSLocEnUS.dat": "MSTTSLocEnUS.dat", "EnUS.address.dat": "enUS.Address.dat",
                  "EnUS.companyname.dat": "enUS.CompanyName.dat", "EnUS.computer.dat": "enUS.Computer.dat",
@@ -42,6 +58,7 @@ EN_GB_SHARED = ["MSTTSLocEnGB.dat", "EnGB.name.dat"]
 # lines of the OneCore upstream's corpora through Sonia and 200 through Ryan render bit-identical without it.
 EN_GB_LEFT_OUT = ["MSTTSLocEnUS.dat"]
 APPX_META = ["AppxBlockMap.xml", "AppxSignature.p7x", "AppxManifest.xml"]
+CONTENT_TYPES = "[Content_Types].xml"  # in a zipped .Msix only; its hash is signed too (after "AXCT")
 SDK = ["libMicrosoft.CognitiveServices.Speech.core.dylib",
        "libMicrosoft.CognitiveServices.Speech.extension.embedded.tts.dylib",
        "libMicrosoft.CognitiveServices.Speech.extension.onnxruntime.dylib"]
@@ -82,6 +99,11 @@ def check_package(pkg, scratch):
     at = signed.find(b"AXBM")
     if at < 0 or signed[at + 4:at + 36] != hashlib.sha256(bm_bytes).digest():
         fail(pkg + ": the signature does not cover this AppxBlockMap.xml")
+    ct = os.path.join(pkg, CONTENT_TYPES)
+    if os.path.isfile(ct):
+        at = signed.find(b"AXCT")
+        if at < 0 or signed[at + 4:at + 36] != hashlib.sha256(open(ct, "rb").read()).digest():
+            fail(pkg + ": the signature does not cover this " + CONTENT_TYPES)
     out = {}
     for f in ET.fromstring(bm_bytes).iter(BM + "File"):
         name = f.get("Name").replace("\\", "/")
@@ -103,6 +125,25 @@ def check_package(pkg, scratch):
     return out
 
 
+def unzip_msix(name, scratch):
+    """The .Msix (a zip) checked against its recorded SHA-256, then unzipped to build/neural-stage/<package>/."""
+    fname, want = MSIX[name]
+    msix = os.path.join(ROOT, MSIX_DIR, fname)
+    if not os.path.isfile(msix):
+        fail("missing " + os.path.relpath(msix, ROOT))
+    if sha(msix) != want:
+        fail(fname + ": SHA-256 differs from the one recorded")
+    pkg = os.path.join(scratch, fname[:-len(".Msix")])
+    shutil.rmtree(pkg, ignore_errors=True)
+    with zipfile.ZipFile(msix) as z:
+        for info in z.infolist():
+            n = info.filename
+            if n.endswith("/") or n.startswith("/") or ".." in n.split("/"):
+                continue
+            z.extract(info, pkg)
+    return pkg
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     record = "--record" in sys.argv
@@ -115,19 +156,23 @@ def main():
     nv = os.path.join(ROOT, "NeuralVoices")
     shutil.rmtree(nv, ignore_errors=True)
     os.makedirs(os.path.join(nv, "en-GB"))
+    os.makedirs(os.path.join(nv, "en-IN"))
     en_gb = {}
     for name, locale, ini in VOICES:
-        pkgs = glob.glob(os.path.join(src, "MicrosoftVoices", "MicrosoftWindows.Voice.%s.%s.1_*" % (locale, name)))
-        if len(pkgs) != 1:
-            fail("expected one package for %s, found %d" % (name, len(pkgs)))
-        pkg = pkgs[0]
+        if name in MSIX:
+            pkg = unzip_msix(name, scratch)
+        else:
+            pkgs = glob.glob(os.path.join(src, "MicrosoftVoices", "MicrosoftWindows.Voice.%s.%s.1_*" % (locale, name)))
+            if len(pkgs) != 1:
+                fail("expected one package for %s, found %d" % (name, len(pkgs)))
+            pkg = pkgs[0]
         listed = check_package(pkg, scratch)
         dst = os.path.join(nv, name)
         os.makedirs(dst)
-        shared = ONECORE_EN_US if locale == "en-US" else ONECORE_EN_GB
+        shared = {"en-US": ONECORE_EN_US, "en-GB": ONECORE_EN_GB}.get(locale, {})
         for f in sorted(os.listdir(pkg)):
             p = os.path.join(pkg, f)
-            if not os.path.isfile(p) or f in APPX_META:
+            if not os.path.isfile(p) or f in APPX_META or f == CONTENT_TYPES:
                 continue
             if f not in listed:
                 fail(p + ": not in the package's block map")
@@ -136,10 +181,10 @@ def main():
                     fail("%s differs from OneCoreVoice/%s" % (p, shared[f]))
             elif locale == "en-GB" and f in EN_GB_LEFT_OUT:
                 continue
-            elif locale == "en-GB" and f in EN_GB_SHARED:
-                if en_gb.setdefault(f, listed[f]) != listed[f]:
-                    fail(p + ": differs from the other en-GB voice's copy")
-                shutil.copyfile(p, os.path.join(nv, "en-GB", f))
+            elif (locale == "en-GB" and f in EN_GB_SHARED) or (locale == "en-IN" and f in EN_IN_SHARED):
+                if en_gb.setdefault(locale + "/" + f, listed[f]) != listed[f]:
+                    fail(p + ": differs from the other %s voice's copy" % locale)
+                shutil.copyfile(p, os.path.join(nv, locale, f))
             else:
                 shutil.copyfile(p, os.path.join(dst, f))
         if not os.path.isfile(os.path.join(dst, ini)):

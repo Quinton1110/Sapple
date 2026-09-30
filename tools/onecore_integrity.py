@@ -1,4 +1,5 @@
-# Structural checks of Microsoft David / Zira / Mark's (en-US), Hazel / George / Susan's (en-GB), Eva's and Sarah's data (OneCoreVoice/),
+# Structural checks of Microsoft David / Zira / Mark's (en-US), Hazel / George / Susan's (en-GB), Eva's and Sarah's data,
+# Catherine / James's (en-AU) and Linda / Richard's (en-CA), and Matilda's (en-AU neural) (OneCoreVoice/),
 # from facts documented in
 # ms-david-zira-decomp's notes (frontend.md 1.1 - the .dat container; backend_io.md - APM; zb.h - [EmotionRecipe]).
 # Reads only; well under a second.   python3 tools/onecore_integrity.py OneCoreVoice
@@ -150,4 +151,68 @@ check(len(bep) == 22896, 'Sarah.bep: %d bytes' % len(bep))
 ini = open(d + 'M2057Sarah.INI', 'rb').read().decode('latin-1').replace('\r', '')
 check('[NN]' in ini and '[EmotionRecipe]' not in ini and 'Enabled=true' in ini.split('[MultiBandExcitation]', 1)[-1].split('\n[', 1)[0],
       'Sarah.INI: [NN] section, MultiBandExcitation enabled, no [EmotionRecipe] (no emotion presets)')
+# en-AU (Catherine, James) and en-CA (Linda, Richard), 2026-09-29 (tools/onecore_lof_stage.py): containers tile, the
+# resources the en-GB front end needs are present, APM magic and 16 kHz, BEP where shipped, INIs are 8-bit text (staged from
+# UTF-16) with no [EmotionRecipe]
+for name in ('MSTTSLocEnAU.dat', 'EnAU.Address.dat', 'EnAU.CityName.dat', 'EnAU.CompanyName.dat', 'EnAU.Computer.dat',
+             'EnAU.Message.dat', 'EnAU.Name.dat', 'MSTTSLocEnCA.dat', 'enCA.Address.dat', 'enCA.CompanyName.dat',
+             'enCA.Computer.dat', 'enCA.Media.dat', 'enCA.Message.dat', 'enCA.Name.dat'):
+    b = open(d + name, 'rb').read()
+    res = []
+    tiled = walk(b, 0, len(b), 0, res)
+    check(tiled and len(res) >= 1, '%s: %d bytes, the chunks tile the file, %d resources' % (name, len(b), len(res)))
+    if name.startswith('MSTTSLoc'):
+        have = {t for t, _ in res}
+        missing = [hex(x) for x in need_gb if x not in have]
+        check(not missing, '%s has the %d resources the front end needs%s' % (name, len(need_gb), (' - missing ' + ', '.join(missing)) if missing else ''))
+for lcid, v, bep_len in (('3081', 'Catherine', 0), ('3081', 'James', 1936), ('4105', 'Linda', 0), ('4105', 'Richard', 1736)):
+    apm = open(d + 'M%s%s.APM' % (lcid, v), 'rb').read()
+    rate = struct.unpack_from('<I', apm, 0x28)[0]
+    check(apm[:4] == b'APM ' and rate == 16000, '%s.APM: "APM " header, %d Hz, %d bytes' % (v, rate, len(apm)))
+    if bep_len:
+        bep = open(d + 'M%s%s.BEP' % (lcid, v), 'rb').read()
+        check(len(bep) == bep_len, '%s.BEP: %d bytes' % (v, len(bep)))
+    ini = open(d + 'M%s%s.INI' % (lcid, v), 'rb').read()
+    check(ini[:2] != b'\xff\xfe' and b'\0' not in ini and b'[SilenceLength]' in ini and b'[EmotionRecipe]' not in ini,
+          '%s.INI: 8-bit text, no [EmotionRecipe]' % v)
+# Matilda (neural, en-AU, 2026-09-30, tools/onecore_lof_stage.py; the package's own mixed-case names): the NNM (468
+# inputs, 94 outputs per frame, streams LSF (order 24) / gain / log F0 / five-band excitation / voicing), the TDAT (version
+# 3, 468 -> 94, 8 layers, all int16 or scaling), the HEQ (duration and log-F0 tables of 21 quantiles), APM 16 kHz, INI
+# 8-bit text (staged from UTF-16), [NN] and MultiBandExcitation on, NO [EmotionRecipe]
+apm = open(d + 'M3081Matilda.APM', 'rb').read()
+check(apm[:4] == b'APM ' and struct.unpack_from('<I', apm, 0x28)[0] == 16000, 'Matilda.APM: "APM " header, 16000 Hz, %d bytes' % len(apm))
+nnm = open(d + 'M3081Matilda.nnm', 'rb').read()
+qo = struct.unpack_from('<I', nnm, 0x38)[0]
+nfq = struct.unpack_from('<I', nnm, qo + 8)[0]
+p_ = qo + 12 + 4 * nfq
+nq = struct.unpack_from('<I', nnm, p_)[0]; p_ += 4
+for _ in range(nq):
+    p_ += 16 + 4 * struct.unpack_from('<I', nnm, p_ + 12)[0]
+nprec = struct.unpack_from('<I', nnm, p_)[0]
+mo = struct.unpack_from('<I', nnm, 0x40)[0]
+ns = struct.unpack_from('<I', nnm, mo)[0]; q_ = mo + 4; types = []; lsfdim = None
+for _ in range(ns):
+    t_, nseg = struct.unpack_from('<II', nnm, q_)
+    if t_ == 1: lsfdim = struct.unpack_from('<I', nnm, q_ + 12)[0]
+    types.append(t_); q_ += 8 + 8 * nseg
+check(nnm[:4] == b'NNM ' and nq == 468 and nprec == 94 and types == [1, 5, 2, 7, 4] and lsfdim == 24,
+      'Matilda.nnm: "NNM " header, %d network inputs, %d outputs per frame, streams %s, LSF order %s' % (nq, nprec, types, lsfdim))
+td = open(d + 'M3081Matilda.tdat', 'rb').read()
+io = struct.unpack_from('<I', td, 0x14)[0]; lt = struct.unpack_from('<I', td, 0x18)[0]
+tin, tout = struct.unpack_from('<II', td, io); nl = struct.unpack_from('<I', td, lt)[0]
+lin = [struct.unpack_from('<I', td, lt + struct.unpack_from('<I', td, lt + 4 + 4 * k)[0] + 0xc)[0] for k in range(nl)]
+check(struct.unpack_from('<I', td, 0x10)[0] == 3 and (tin, tout, nl) == (468, 94, 8) and lin == [2] * 7 + [3],
+      'Matilda.tdat: version 3, %d -> %d, %d feed-forward layers, linear types %s' % (tin, tout, nl, lin))
+hq = open(d + 'M3081Matilda.HEQ', 'rb').read()
+check(hq[:4] == b'HEQT' and struct.unpack_from('<III', hq, 0x24) == (2, 6, 21) and
+      struct.unpack_from('<II', hq, 0x24 + 12 + 8 * 21) == (2, 21) and len(hq) == 0x24 + 4 + 2 * (8 + 8 * 21),
+      'Matilda.HEQ: duration and log-F0 tables of 21 quantiles, exact size')
+bep = open(d + 'M3081Matilda.BEP', 'rb').read()
+check(len(bep) == 2456, 'Matilda.BEP: %d bytes' % len(bep))
+ini = open(d + 'M3081Matilda.INI', 'rb').read()
+check(ini[:2] != b'\xff\xfe' and b'\0' not in ini, 'Matilda.INI: 8-bit text')
+ini = ini.decode('latin-1').replace('\r', '')
+check('[NN]' in ini and '[EmotionRecipe]' not in ini and 'Enabled=true' in ini.split('[MultiBandExcitation]', 1)[-1].split('\n[', 1)[0],
+      'Matilda.INI: [NN] section, MultiBandExcitation enabled, no [EmotionRecipe] (no emotion presets)')
+
 sys.exit(0 if ok else 1)

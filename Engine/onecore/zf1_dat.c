@@ -98,9 +98,20 @@ static const zf1_domfile DOM_ENGB[] = {
     {"name", "enGB.Name.dat"}, {"message", "enGB.Message.dat"}, {"computer", "enGB.Computer.dat"},
     {"address", "EnGB.Address.dat"}, {"companyName", "EnGB.CompanyName.dat"}, {"cityName", "EnGB.CityName.dat"}};
 
+/* 2026-09-29: en-AU, en-CA - each MSTTSLoc<xx>.INI [Domain] in its order, named as staged in OneCoreVoice */
+static const zf1_domfile DOM_ENAU[] = {
+    {"name", "EnAU.Name.dat"}, {"message", "EnAU.Message.dat"}, {"computer", "EnAU.Computer.dat"},
+    {"address", "EnAU.Address.dat"}, {"companyName", "EnAU.CompanyName.dat"}, {"cityName", "EnAU.CityName.dat"}};
+static const zf1_domfile DOM_ENCA[] = {
+    {"address", "enCA.Address.dat"}, {"name", "enCA.Name.dat"}, {"message", "enCA.Message.dat"},
+    {"computer", "enCA.Computer.dat"}, {"media", "enCA.Media.dat"}, {"companyName", "enCA.CompanyName.dat"}};
+#define DOMS(t) (*tab = t, (int)(sizeof t / sizeof *t))
+
 int zf1_domain_files(int lcid, const zf1_domfile **tab)
 {
     if (lcid == 2057) { *tab = DOM_ENGB; return (int)(sizeof DOM_ENGB / sizeof *DOM_ENGB); }
+    if (lcid == 3081) return DOMS(DOM_ENAU);
+    if (lcid == 4105) return DOMS(DOM_ENCA);
     *tab = NULL;
     return 0;
 }

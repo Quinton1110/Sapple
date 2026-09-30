@@ -73,7 +73,7 @@ typedef struct {
  * data_dir: NULL = C:/Windows/Speech_OneCore/Engines/TTS/en-US. */
 ZIRA_API zira_tts *zira_tts_open(const char *data_dir, const char *voice, char *err, size_t errlen);
 ZIRA_API void zira_tts_close(zira_tts *t);
-/* ClassicVoices patch: the locale (LCID) of a voice name: 1033 en-US, 2057 en-GB, 0 unknown. */
+/* ClassicVoices patch: the locale (LCID) of a voice name: 1033 en-US, 2057 en-GB, 3081 en-AU, 4105 en-CA, 0 unknown. */
 ZIRA_API int zira_tts_voice_lcid(const char *voice);
 
 /* The voice this handle speaks with, and the data folder it was loaded from. */

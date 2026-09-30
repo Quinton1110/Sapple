@@ -218,6 +218,9 @@ func runParse() {
     }
     oldSlugs += ["onecore_hazel", "onecore_george", "onecore_susan", "onecore_eva", "onecore_eva_happy", "onecore_eva_sad",
                  "onecore_eva_angry", "onecore_sarah"]
+    // 2026-09-29 / 30: the new OneCore voices go last in ONECORE_VOICES, before the SAPI 4 voices. Slugs are what
+    // VoiceOver stores (VoiceCatalog.def(forIdentifier:) matches by slug); the in-app picker index is not persisted.
+    oldSlugs += ["onecore_catherine", "onecore_james", "onecore_linda", "onecore_richard", "onecore_matilda"]
     let sapi4Modes: [String] = ["sam", "mike", "mary", "mike_telephone", "mary_telephone", "mike_hall", "mike_stadium",
                                 "mike_space", "mary_hall", "mary_stadium", "mary_space", "robosoft1", "robosoft2", "robosoft3",
                                 "robosoft4", "robosoft5", "robosoft6", "male_whisper", "female_whisper"]
@@ -533,7 +536,7 @@ func runNeural(_ outDir: String) {
     guard !NEURAL_VOICES.isEmpty else { check(false, "no neural voices on this Mac"); return }
     print("\nvoice   fixture        before: gaps ms (dur)                     after: gaps ms (dur)")
     for v in NEURAL_VOICES {
-        let oldRate = v.language == "en-GB" ? 10 * log(100.0 / 95.0) / log(3.0) : 0   // RateAdjustment 100
+        let oldRate = v.language != "en-US" ? 10 * log(100.0 / 95.0) / log(3.0) : 0   // RateAdjustment 100 (en-GB / en-IN: 95)
         for f in neuralFixtures {
             var before: [Int16] = []
             let rcb = ClassicEngine.shared.speak(text: oldNeuralPlainText(f.ssml), voice: v, sapiRate: oldRate, semitones: 0,

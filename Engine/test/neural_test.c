@@ -1,4 +1,4 @@
-/* Mac test driver for the neural voices - Jenny, Aria, Guy (en-US), Sonia, Ryan (en-GB), the Windows 11 natural voices on
+/* Mac test driver for the neural voices - Jenny, Aria, Guy (en-US), Sonia, Ryan (en-GB), Neerja, Prabhat (en-IN), the Windows 11 natural voices on
  * Microsoft's embedded Speech SDK - through their bridge (Shared/Bridge/cvn_bridge.c) exactly as the iOS targets compile
  * it, driven the way ClassicEngine.swift drives it. The SDK is NeuralSDK/macos (the iOS dylibs re-tagged for macOS by
  * tools/neural_stage.py): the same arm64 code the phone runs.
@@ -19,8 +19,8 @@
 #include <string.h>
 #include <sys/time.h>
 
-#define NV 5
-static const char *const VOICES[NV] = {"Jenny", "Aria", "Guy", "Sonia", "Ryan"};
+#define NV 7
+static const char *const VOICES[NV] = {"Jenny", "Aria", "Guy", "Sonia", "Ryan", "Neerja", "Prabhat"};
 static char SDK[1024], DATA[1024], ONECORE[1024], WORK[1024];
 static int failures;
 
@@ -301,11 +301,17 @@ static void selftest(const char *out)
     }
     free(a.pcm);
 
-    /* memory: every voice in turn, then 100 utterances of one: flat */
+    /* memory: every voice in turn, then 100 utterances over every voice, rate and pitch: flat. With seven voices the
+     * footprint still settles by 2.5-5.5 MB over the first such round (measured 2026-09-30: then +0.6 MB over 300 more), so
+     * one warm-up round comes first and the check is over the second. */
     {
         double m1, m2;
         for (i = 0; i < NV; i++) {
             say(v[i], "Checking memory.", 0, 0, &a);
+            free(a.pcm);
+        }
+        for (i = 0; i < 100; i++) {
+            say(v[i % NV], "Checking memory once more, with a slightly longer sentence.", (i % 7) - 3, (i % 3) - 1, &a);
             free(a.pcm);
         }
         m1 = footprint_mb();
@@ -314,7 +320,7 @@ static void selftest(const char *out)
             free(a.pcm);
         }
         m2 = footprint_mb();
-        snprintf(what, sizeof what, "memory: %.1f MB with all five voices loaded, %.1f MB after 100 more utterances", m1, m2);
+        snprintf(what, sizeof what, "memory: %.1f MB with all seven voices loaded, %.1f MB after 100 more utterances", m1, m2);
         check(m2 - m1 < 5, what);
     }
     for (i = 0; i < NV; i++) cvn_voice_close(v[i]);

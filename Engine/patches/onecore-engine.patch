@@ -1074,7 +1074,7 @@
 +#endif
 --- a/src/eva_voice.c
 +++ b/Engine/onecore/eva_voice.c
-@@ -0,0 +1,480 @@
+@@ -0,0 +1,482 @@
 +/* eva_voice.c - Microsoft Eva back end (see eva_voice.h).  ClassicVoices addition, ported from ~/code/eva-onecore
 + * (notes/eva_dnn.md, notes/eva_prosody.md there).  Status legend: [S] = transcribed from the decompile of the
 + * Windows 11 26100.1742 DLLs, [G] = inferred.
@@ -1323,7 +1323,8 @@
 +    e->sL = nnm_stream(&e->nnm, 1); e->sG = nnm_stream(&e->nnm, 5); e->sF = nnm_stream(&e->nnm, 2);
 +    e->sV = nnm_stream(&e->nnm, 4); e->sM = nnm_stream(&e->nnm, 7);
 +    if (e->net->in != e->nnm.nq || e->net->out % e->nnm.nprec || e->sL < 0 || e->sG < 0 || e->sF < 0 || e->sV < 0
-+        || e->nnm.stream[e->sL].dim[0] != 40 || e->nnm.stream[e->sL].nseg != 3 || e->nnm.stream[e->sG].nseg != 3
++        || (e->nnm.stream[e->sL].dim[0] != 40 && e->nnm.stream[e->sL].dim[0] != 24)   /* Eva / Sarah 40, Matilda 24 */
++        || e->nnm.stream[e->sL].nseg != 3 || e->nnm.stream[e->sG].nseg != 3
 +        || e->nnm.stream[e->sF].nseg != 3
 +        || (e->sM >= 0 && (e->nnm.stream[e->sM].nseg != 3 || e->nnm.stream[e->sM].dim[0] > ZB_MBE_MAXBANDS)))
 +        { snprintf(err, errlen, "unexpected NNM / TDAT layout"); goto fail; }
@@ -1541,7 +1542,8 @@
 +        trace->dur = malloc(sizeof(int) * (size_t)nst);
 +        if (trace->dur) memcpy(trace->dur, dur, sizeof(int) * (size_t)nst);
 +    }
-+    /* ---- the float LSF vocoder at order 40 (Eva's NNM has no Sew stream, so no ITFTE [S]) + wave stage ---- */
++    /* ---- the float LSF vocoder at the NNM's order (Eva / Sarah 40, Matilda 24 like the HMM voices; Eva's NNM has no
++     *      Sew stream, so no ITFTE [S]) + wave stage ---- */
 +    free(o); o = NULL; free(pa); pa = NULL; free(ba); ba = NULL;
 +    pcm = calloc((size_t)T * (size_t)vb->shift + 1, sizeof(short));
 +    if (!pcm) goto done;
@@ -2168,7 +2170,7 @@
      free(d->buf);
      memset(d, 0, sizeof *d);
  }
-@@ -66,3 +92,31 @@
+@@ -66,3 +92,42 @@
      if (size) *size = 0;
      return NULL;
  }
@@ -2178,9 +2180,20 @@
 +    {"name", "enGB.Name.dat"}, {"message", "enGB.Message.dat"}, {"computer", "enGB.Computer.dat"},
 +    {"address", "EnGB.Address.dat"}, {"companyName", "EnGB.CompanyName.dat"}, {"cityName", "EnGB.CityName.dat"}};
 +
++/* 2026-09-29: en-AU, en-CA - each MSTTSLoc<xx>.INI [Domain] in its order, named as staged in OneCoreVoice */
++static const zf1_domfile DOM_ENAU[] = {
++    {"name", "EnAU.Name.dat"}, {"message", "EnAU.Message.dat"}, {"computer", "EnAU.Computer.dat"},
++    {"address", "EnAU.Address.dat"}, {"companyName", "EnAU.CompanyName.dat"}, {"cityName", "EnAU.CityName.dat"}};
++static const zf1_domfile DOM_ENCA[] = {
++    {"address", "enCA.Address.dat"}, {"name", "enCA.Name.dat"}, {"message", "enCA.Message.dat"},
++    {"computer", "enCA.Computer.dat"}, {"media", "enCA.Media.dat"}, {"companyName", "enCA.CompanyName.dat"}};
++#define DOMS(t) (*tab = t, (int)(sizeof t / sizeof *t))
++
 +int zf1_domain_files(int lcid, const zf1_domfile **tab)
 +{
 +    if (lcid == 2057) { *tab = DOM_ENGB; return (int)(sizeof DOM_ENGB / sizeof *DOM_ENGB); }
++    if (lcid == 3081) return DOMS(DOM_ENAU);
++    if (lcid == 4105) return DOMS(DOM_ENCA);
 +    *tab = NULL;
 +    return 0;
 +}
@@ -2852,7 +2865,7 @@
  };
  
  static int stricmp_ascii(const char *a, const char *b)
-@@ -45,30 +49,74 @@
+@@ -45,32 +49,89 @@
  
  const char *zira_tts_voice(const zira_tts *t) { return t ? t->voice : NULL; }
  
@@ -2865,7 +2878,12 @@
 +    {"David", 1033, 1}, {"Zira", 1033, 0}, {"Mark", 1033, 1},
 +    {"Hazel", 2057, 0}, {"George", 2057, 1}, {"Susan", 2057, 0},
 +    {"Eva", 1033, 0},    /* ClassicVoices addition: Microsoft Eva (eva_voice.c) */
-+    {"Sarah", 2057, 0}};  /* ClassicVoices addition: Microsoft Sarah, the en-GB neural voice (eva_voice.c) */
++    {"Sarah", 2057, 0},   /* ClassicVoices addition: Microsoft Sarah, the en-GB neural voice (eva_voice.c) */
++    /* ClassicVoices addition (2026-09-29): the other English OneCore voices, from the Windows 11 Languages and Optional
++     * Features image: en-AU Catherine / James, en-CA Linda / Richard (en-IN Heera / Ravi and en-IE Sean need multi-band
++     * excitation and larger LSF models the reconstruction does not have) */
++    {"Catherine", 3081, 0}, {"James", 3081, 1}, {"Linda", 4105, 0}, {"Richard", 4105, 1},
++    {"Matilda", 3081, 0}};  /* ClassicVoices addition (2026-09-30): Microsoft Matilda, the en-AU neural voice (eva_voice.c) */
 +
 +int zira_tts_voice_lcid(const char *voice)
 +{
@@ -2875,7 +2893,15 @@
 +    return 0;
 +}
 +
-+static const char *lcid_tag(int lcid) { return lcid == 2057 ? "EnGB" : "EnUS"; }
++static const char *lcid_tag(int lcid)
++{
++    switch (lcid) {
++    case 2057: return "EnGB";
++    case 3081: return "EnAU";
++    case 4105: return "EnCA";
++    default: return "EnUS";
++    }
++}
 +
  zira_tts *zira_tts_open(const char *data_dir, const char *voice, char *err, size_t errlen)
  {
@@ -2913,15 +2939,15 @@
 +    t->e = zf1_open_lcid(dat, t->lcid);
      if (!t->vf || !t->e) {
          if (err) snprintf(err, errlen, "cannot load %s.INI or %s", vpath, dat);
-+        goto fail;
-+    }
+         goto fail;
+     }
 +    /* the back half's phone ids are the language data's (en-US: identical to zf2's built-in table) */
 +    ps = zf1_resource(t->e, 0x29a5584bu, 0x153f1b64u, &n);
 +    if (zf2_voice_set_phoneset(t->vf, ps, n) < 0) {
 +        if (err) snprintf(err, errlen, "bad phone set in %s", dat);
 +        goto fail;
 +    }
-+    if (!stricmp_ascii(t->voice, "Eva") || !stricmp_ascii(t->voice, "Sarah")) {
++    if (!stricmp_ascii(t->voice, "Eva") || !stricmp_ascii(t->voice, "Sarah") || !stricmp_ascii(t->voice, "Matilda")) {
 +        /* ClassicVoices addition: the neural back end (+ Eva's prosody models) */
 +        char e2[256];
 +        t->eva = eva_model_open(vpath, t->lcid, t->vf, e2, sizeof e2);
@@ -2931,10 +2957,12 @@
 +        }
 +    } else if (!zb_voice_has_acoustics(t->vb)) {
 +        if (err) snprintf(err, errlen, "%s.APM lacks LSF/LF0 models", vpath);
-         goto fail;
-     }
++        goto fail;
++    }
      return t;
-@@ -80,6 +128,7 @@
+ fail:
+     zira_tts_close(t);
+@@ -80,6 +141,7 @@
  void zira_tts_close(zira_tts *t)
  {
      if (!t) return;
@@ -2942,7 +2970,7 @@
      if (t->e) zf1_close(t->e);
      if (t->vf) zf2_voice_free(t->vf);
      if (t->vb) zb_voice_free(t->vb);
-@@ -96,8 +145,23 @@
+@@ -96,8 +158,23 @@
      if (rate > 20) rate = 20;
      t->sapi.rate = rate > 10 ? 10 : rate;
      t->rate_ext = rate > 10 ? rate - 10 : 0;
@@ -2966,7 +2994,7 @@
  void zira_tts_set_volume(zira_tts *t, int volume) { t->sapi.volume = volume < 0 ? 0 : volume > 100 ? 100 : volume; }
  void zira_tts_set_pitch(zira_tts *t, int pitch) { t->pitch = pitch < -10 ? -10 : pitch > 10 ? 10 : pitch; }
  void zira_tts_cancel(zira_tts *t) { t->cancel = 1; }
-@@ -273,7 +337,21 @@
+@@ -273,7 +350,21 @@
          memset(&u, 0, sizeof u);
          memset(&ev, 0, sizeof ev);
          memset(&tr, 0, sizeof tr);
@@ -2989,7 +3017,7 @@
              apply_controls(t, &u);
              c->ev = &ev;
              c->tr = &tr;
-@@ -313,7 +391,8 @@
+@@ -313,7 +404,8 @@
      /* SAPI hands <lang langid="..."> ... </lang> to the language's default voice as a separate job, keeping the
         gender: a male voice switches to David, Zira (female) stays herself.  Same rule as zira_say.c. */
      while (*p && !rc && !t->cancel && !c.stopped) {
@@ -2999,7 +3027,7 @@
          int david = 0;
          if (tag == p) {
              char *gt = strchr(p, '>'), *close = gt ? strstr(gt, "</lang>") : NULL;
-@@ -333,6 +412,11 @@
+@@ -333,6 +425,11 @@
              snprintf(dp, sizeof dp, "%s/M1033David", t->dir);
              t->db = zb_voice_load(dp, err, sizeof err);
              t->df = zf2_voice_load(dp);
@@ -3011,7 +3039,7 @@
          }
          if (*piece) {
              ZbVoice *ub = david && t->db ? t->db : t->vb;
-@@ -355,3 +439,11 @@
+@@ -355,3 +452,11 @@
      }
      return rc;
  }
@@ -3036,7 +3064,7 @@
   * data_dir: NULL = C:/Windows/Speech_OneCore/Engines/TTS/en-US. */
  ZIRA_API zira_tts *zira_tts_open(const char *data_dir, const char *voice, char *err, size_t errlen);
  ZIRA_API void zira_tts_close(zira_tts *t);
-+/* ClassicVoices patch: the locale (LCID) of a voice name: 1033 en-US, 2057 en-GB, 0 unknown. */
++/* ClassicVoices patch: the locale (LCID) of a voice name: 1033 en-US, 2057 en-GB, 3081 en-AU, 4105 en-CA, 0 unknown. */
 +ZIRA_API int zira_tts_voice_lcid(const char *voice);
  
  /* The voice this handle speaks with, and the data folder it was loaded from. */

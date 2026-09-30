@@ -246,7 +246,8 @@ EvaModel *eva_model_open(const char *vp, int lcid, zf2_voice *vf, char *err, int
     e->sL = nnm_stream(&e->nnm, 1); e->sG = nnm_stream(&e->nnm, 5); e->sF = nnm_stream(&e->nnm, 2);
     e->sV = nnm_stream(&e->nnm, 4); e->sM = nnm_stream(&e->nnm, 7);
     if (e->net->in != e->nnm.nq || e->net->out % e->nnm.nprec || e->sL < 0 || e->sG < 0 || e->sF < 0 || e->sV < 0
-        || e->nnm.stream[e->sL].dim[0] != 40 || e->nnm.stream[e->sL].nseg != 3 || e->nnm.stream[e->sG].nseg != 3
+        || (e->nnm.stream[e->sL].dim[0] != 40 && e->nnm.stream[e->sL].dim[0] != 24)   /* Eva / Sarah 40, Matilda 24 */
+        || e->nnm.stream[e->sL].nseg != 3 || e->nnm.stream[e->sG].nseg != 3
         || e->nnm.stream[e->sF].nseg != 3
         || (e->sM >= 0 && (e->nnm.stream[e->sM].nseg != 3 || e->nnm.stream[e->sM].dim[0] > ZB_MBE_MAXBANDS)))
         { snprintf(err, errlen, "unexpected NNM / TDAT layout"); goto fail; }
@@ -464,7 +465,8 @@ int eva_synth(EvaModel *e, ZbVoice *vb, const zf2_sent *s, const ZbUtt *u, const
         trace->dur = malloc(sizeof(int) * (size_t)nst);
         if (trace->dur) memcpy(trace->dur, dur, sizeof(int) * (size_t)nst);
     }
-    /* ---- the float LSF vocoder at order 40 (Eva's NNM has no Sew stream, so no ITFTE [S]) + wave stage ---- */
+    /* ---- the float LSF vocoder at the NNM's order (Eva / Sarah 40, Matilda 24 like the HMM voices; Eva's NNM has no
+     *      Sew stream, so no ITFTE [S]) + wave stage ---- */
     free(o); o = NULL; free(pa); pa = NULL; free(ba); ba = NULL;
     pcm = calloc((size_t)T * (size_t)vb->shift + 1, sizeof(short));
     if (!pcm) goto done;

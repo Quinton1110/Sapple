@@ -42,7 +42,7 @@
 //  five-band excitation; no prosody models and no [EmotionRecipe], so she comes plain only, en-GB. Same picker section.
 //
 //  The sixth, NEURAL_VOICES, is the Windows 11 Narrator "natural" voices - Jenny, Aria and Guy (en-US), Sonia and Ryan
-//  (en-GB) - on Microsoft's own embedded (offline) Speech SDK engine (cvn_bridge.c; the SDK's dylibs in NeuralSDK, the
+//  (en-GB), Neerja and Prabhat (en-IN, 2026-09-30) - on Microsoft's own embedded (offline) Speech SDK engine (cvn_bridge.c; the SDK's dylibs in NeuralSDK, the
 //  voice models in NeuralVoices). They come from Quinton's earlier separate app, NeuralVoice (Quinton, 2026-09-27: "I'd
 //  like to retire that app and just have them be options in this app"). Picker section "Neural". Slugs start with
 //  "neural_", which no other slug does. (The old app's identifiers were com.quinton.neuralvoice.<name> - another app, so a
@@ -66,8 +66,8 @@ enum ClassicEngineKind: Hashable {
     case sapi4      // Engine/sapi4: Microsoft's SAPI 4 engine (msttssyn.dll) decompiled to C (cv4n_bridge; was the DLL in SAPI4/emu)
     case truvoice   // Engine/opentv: L&H / Centigram TruVoice decompiled to C (cvt_bridge; was tv_enua.dll in SAPI4/emu)
     case anna       // Engine/anna: Microsoft Anna (Vista / 7 TTS20) reconstructed in C, Microsoft's data (AnnaVoice)
-    case onecore    // Engine/onecore: Microsoft David / Zira / Mark / Hazel / George / Susan / Eva / Sarah (Windows 10 / 11), data OneCoreVoice
-    case neural     // Microsoft's embedded Speech SDK (NeuralSDK, dlopen'ed) + cvn_bridge.c: Jenny / Aria / Guy / Sonia / Ryan, data NeuralVoices
+    case onecore    // Engine/onecore: Microsoft David / Zira / Mark / Hazel / George / Susan / Eva / Sarah / Catherine / James / Linda / Richard / Matilda (Windows 10 / 11), data OneCoreVoice
+    case neural     // Microsoft's embedded Speech SDK (NeuralSDK, dlopen'ed) + cvn_bridge.c: Jenny / Aria / Guy / Sonia / Ryan / Neerja / Prabhat, data NeuralVoices
 }
 
 struct ClassicVoiceDef: Hashable {
@@ -79,8 +79,8 @@ struct ClassicVoiceDef: Hashable {
     let female: Bool
     var engine: ClassicEngineKind = .sapi5
     var sapi4Mode: String = ""   // .sapi4 / .truvoice: the engine's own mode name ("Mike in Hall")
-    var neuralVoice: String = ""  // .neural: "Jenny", "Aria", "Guy", "Sonia", "Ryan" (NeuralVoices/<name>)
-    var oneCoreVoice: String = "" // .onecore: "David", "Zira", "Mark", "Eva" (M1033<name>.*) or "Hazel", "George", "Susan", "Sarah" (M2057<name>.*)
+    var neuralVoice: String = ""  // .neural: "Jenny", "Aria", "Guy", "Sonia", "Ryan", "Neerja", "Prabhat" (NeuralVoices/<name>)
+    var oneCoreVoice: String = "" // .onecore: "David", "Zira", "Mark", "Eva" (M1033<name>.*), "Hazel", "George", "Susan", "Sarah" (M2057<name>.*), "Catherine", "James", "Matilda" (M3081<name>.*), "Linda", "Richard" (M4105<name>.*)
     var emotion: String = ""      // .onecore: "" (normal), "happy", "sad" or "angry" (the voice file's [EmotionRecipe])
     var language: String = "en-US" // BCP 47; what VoiceOver lists the voice under (the en-GB OneCore voices: "en-GB")
 
@@ -132,16 +132,29 @@ let CLASSIC_VOICES: [ClassicVoiceDef] = [
 let ANNA_VOICE = ClassicVoiceDef(slug: "anna", display: "Anna", spd: "", effect: "none", basePitch: 0,
                                  female: true, engine: .anna)
 
+/// The OneCore voices whose INIs carry the [EmotionRecipe] presets happy / sad / angry.
+let ONECORE_EMOTION_VOICES: Set<String> = ["David", "Zira", "Mark", "Eva"]
+
 /// Microsoft David, Zira and Mark (Windows 10 / 11 OneCore, en-US), each plain and in its three hidden emotion presets
 /// (12 voices), then Microsoft Hazel, George and Susan (en-GB, no emotion presets in their files: 3 voices), then
 /// Microsoft Eva (en-US, the neural "Cortana" voice, 2026-09-25: plain and in her INI's three presets, 4 voices), then
-/// Microsoft Sarah (en-GB, the British neural voice, 2026-09-25: plain only, her INI has no presets).
+/// Microsoft Sarah (en-GB, the British neural voice, 2026-09-25: plain only, her INI has no presets), then Microsoft
+/// Catherine and James (en-AU) and Linda and Richard (en-CA) (2026-09-29, from the Windows 11 language packages: plain only,
+/// no presets in their INIs; VoiceOver lists Catherine and James under English (Australia), and Linda and Richard under
+/// English (US): iOS's VoiceOver voice picker has no English (Canada) section, so an "en-CA" tag hid them (Quinton,
+/// 2026-09-30). The tag is only what the system lists them under; the engine still uses their en-CA LCID 4105 and data),
+/// then Microsoft Matilda (en-AU, the Australian neural voice Windows ships but never lists, 2026-09-30: plain only, her INI
+/// has no presets; LCID 3081 and the en-AU data Catherine and James use).
+/// Only David, Zira, Mark and Eva have emotion presets (ONECORE_EMOTION_VOICES), whatever their language tag.
 /// Slugs "onecore_<voice>" and "onecore_<voice>_<emotion>" are permanent.
 let ONECORE_VOICES: [ClassicVoiceDef] = [("David", false, "en-US"), ("Zira", true, "en-US"), ("Mark", false, "en-US"),
                                          ("Hazel", true, "en-GB"), ("George", false, "en-GB"), ("Susan", true, "en-GB"),
-                                         ("Eva", true, "en-US"), ("Sarah", true, "en-GB")]
+                                         ("Eva", true, "en-US"), ("Sarah", true, "en-GB"),
+                                         ("Catherine", true, "en-AU"), ("James", false, "en-AU"),
+                                         ("Linda", true, "en-US"), ("Richard", false, "en-US"),
+                                         ("Matilda", true, "en-AU")]
     .flatMap { name, female, language in
-        (language == "en-US" ? ["", "happy", "sad", "angry"] : [""]).map { emotion in
+        (ONECORE_EMOTION_VOICES.contains(name) ? ["", "happy", "sad", "angry"] : [""]).map { emotion in
             ClassicVoiceDef(slug: "onecore_" + name.lowercased() + (emotion.isEmpty ? "" : "_" + emotion),
                             display: name + (emotion.isEmpty ? "" : " " + emotion.capitalized),
                             spd: "", effect: "none", basePitch: 0, female: female, engine: .onecore,
@@ -195,14 +208,16 @@ let TRUVOICE_VOICES: [ClassicVoiceDef] = [
 ]
 
 /// The Windows 11 Narrator natural voices on Microsoft's embedded Speech SDK (cvn_bridge.c): en-US Jenny, Aria, Guy, then
-/// en-GB Sonia and Ryan (declared en-GB, so VoiceOver lists them under English (United Kingdom)). Slugs "neural_<name>" are
+/// en-GB Sonia and Ryan (declared en-GB, so VoiceOver lists them under English (United Kingdom)), then en-IN Neerja and
+/// Prabhat (2026-09-30, declared en-IN: English (India); last, so no earlier slug moves). Slugs "neural_<name>" are
 /// permanent. Their SDK is arm64 only: an Intel Mac lists none of them.
 let NEURAL_VOICES: [ClassicVoiceDef] = {
 #if os(macOS) && !arch(arm64)
     return []
 #else
     return [("Jenny", true, "en-US"), ("Aria", true, "en-US"), ("Guy", false, "en-US"),
-            ("Sonia", true, "en-GB"), ("Ryan", false, "en-GB")].map { name, female, language in
+            ("Sonia", true, "en-GB"), ("Ryan", false, "en-GB"),
+            ("Neerja", true, "en-IN"), ("Prabhat", false, "en-IN")].map { name, female, language in
         ClassicVoiceDef(slug: "neural_" + name.lowercased(), display: name, spd: "", effect: "none", basePitch: 0,
                         female: female, engine: .neural, neuralVoice: name, language: language)
     }

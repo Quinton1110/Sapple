@@ -1,4 +1,4 @@
-/* ClassicVoices neural bridge (Jenny, Aria, Guy; Sonia, Ryan) - see cvn_bridge.h.
+/* ClassicVoices neural bridge (Jenny, Aria, Guy; Sonia, Ryan; Neerja, Prabhat) - see cvn_bridge.h.
  *
  * The engine is Microsoft's Speech SDK (1.33) with its embedded (offline) TTS extension and ONNX runtime, as three
  * dylibs that are dlopen'ed at run time (the core one loads the other two from its own folder). Only its C API is used,
@@ -65,6 +65,8 @@ static const nv_def VOICES[] = {
     {"Guy", "en-US", "1033.INI", "Microsoft Guy (Natural) - English (United States)"},
     {"Sonia", "en-GB", "2057.INI", "Microsoft Sonia (Natural) - English (United Kingdom)"},
     {"Ryan", "en-GB", "2057.INI", "Microsoft Ryan (Natural) - English (United Kingdom)"},
+    {"Neerja", "en-IN", "1081.INI", "Microsoft Neerja (Natural) - English (India)"},
+    {"Prabhat", "en-IN", "1081.INI", "Microsoft Prabhat (Natural) - English (India)"},
 };
 #define NVOICES ((int)(sizeof VOICES / sizeof VOICES[0]))
 
@@ -288,10 +290,16 @@ static int prepare(int i, const char *data_dir, const char *onecore_dir, const c
             seterr(err, errlen, "missing OneCoreVoice language data for %s", v->name);
             return -1;
         }
-    } else {
+    } else if (!strcmp(v->locale, "en-GB")) {
         snprintf(path, sizeof path, "%s/en-GB", data_dir);
         if (link_folder(G.work[i], path, NULL) < 2 || links(G.work[i], onecore_dir, ONECORE_EN_GB)) {
             seterr(err, errlen, "missing en-GB language data for %s", v->name);
+            return -1;
+        }
+    } else { /* en-IN: MSTTSLocEnIN.dat and its four domain files, all in NeuralVoices/en-IN (OneCoreVoice has none) */
+        snprintf(path, sizeof path, "%s/en-IN", data_dir);
+        if (link_folder(G.work[i], path, NULL) < 5) {
+            seterr(err, errlen, "missing en-IN language data for %s", v->name);
             return -1;
         }
     }

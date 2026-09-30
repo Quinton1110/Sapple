@@ -32,7 +32,8 @@ project's patches applied (Engine/patches/). The upstream licence files are kept
    Licence:  MIT, Copyright (c) 2026 KamiKitsune420 (Engine/anna/LICENSE)
    Patches:  Engine/patches/anna-engine.patch
 
-3. Engine/onecore: Microsoft OneCore engine (David, Zira, Mark, Hazel, George, Susan), reconstructed in C
+3. Engine/onecore: Microsoft OneCore engine (David, Zira, Mark, Hazel, George, Susan; with this project's additions also
+   Eva, Sarah, Matilda, Catherine, James, Linda, Richard), reconstructed in C
    Upstream: https://github.com/KamiKitsune420/ms-david-zira-decomp
    Pinned:   3009a84894fdb37e1f808469cc97ab25006096e1
    Licence:  MIT, Copyright (c) 2026 KamiKitsune420 (Engine/onecore/LICENSE)
@@ -86,9 +87,11 @@ not covered by any licence of this project, and it will be removed on request by
 - Microsoft SAPI 5 voices Sam, Mike and Mary, and their lexicons: Microsoft Corporation.
 - Microsoft SAPI 4 engine msttssyn.dll and its voice files: Microsoft Corporation.
 - Microsoft Anna voice data: Microsoft Corporation.
-- Microsoft OneCore voices and language data (David, Zira, Mark, Hazel, George, Susan, Eva, Sarah): Microsoft
+- Microsoft OneCore voices and language data (David, Zira, Mark, Hazel, George, Susan, Eva, Sarah, Matilda, Catherine,
+  James, Linda, Richard): Microsoft
   Corporation.
-- Windows 11 natural voices (Jenny, Aria, Guy, Sonia, Ryan), the key their models are encrypted with, and the
+- Windows 11 natural voices (Jenny, Aria, Guy, Sonia, Ryan, Neerja, Prabhat), the key their models are encrypted
+  with, and the
   Microsoft Speech SDK embedded libraries: Microsoft Corporation.
 - L&H TruVoice engine and its data tables: originally Copyright (c) 1991-1997 Centigram Communications Corp.; the
   technology passed to Lernout & Hauspie Speech Products (1997), then to ScanSoft (2001), which became Nuance

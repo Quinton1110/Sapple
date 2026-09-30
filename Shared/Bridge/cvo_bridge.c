@@ -1,4 +1,5 @@
-/* ClassicVoices OneCore bridge (Microsoft David, Zira, Mark; Hazel, George, Susan; Eva; Sarah) - see cvo_bridge.h. */
+/* ClassicVoices OneCore bridge (Microsoft David, Zira, Mark; Hazel, George, Susan; Eva; Sarah; Catherine, James; Linda,
+ * Richard; Matilda) - see cvo_bridge.h. */
 #include "cvo_bridge.h"
 #include "zira_tts.h"
 #include "cv_resample.h"
@@ -18,7 +19,8 @@ cvo_voice *cvo_voice_open(const char *dir, const char *voice, char *err, size_t 
     cvo_voice *v;
     if (!voice || (strcmp(voice, "David") && strcmp(voice, "Zira") && strcmp(voice, "Mark") && strcmp(voice, "Hazel") &&
                    strcmp(voice, "George") && strcmp(voice, "Susan") && strcmp(voice, "Eva") &&
-                   strcmp(voice, "Sarah"))) {
+                   strcmp(voice, "Sarah") && strcmp(voice, "Catherine") && strcmp(voice, "James") &&
+                   strcmp(voice, "Linda") && strcmp(voice, "Richard") && strcmp(voice, "Matilda"))) {
         if (err && errlen) snprintf(err, errlen, "unknown OneCore voice");
         return NULL;
     }

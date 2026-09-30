@@ -1,10 +1,11 @@
-/* Mac test driver for Microsoft David, Zira and Mark (en-US) and Hazel, George and Susan (en-GB), the Windows 10 / 11
- * OneCore voices, and the neural Eva (en-US) and Sarah (en-GB): the engine (Engine/onecore)
+/* Mac test driver for Microsoft David, Zira and Mark (en-US), Hazel, George and Susan (en-GB), Catherine and James (en-AU)
+ * and Linda and Richard (en-CA), the Windows 10 / 11
+ * OneCore voices, and the neural Eva (en-US), Sarah (en-GB) and Matilda (en-AU): the engine (Engine/onecore)
  * and its bridge (Shared/Bridge/cvo_bridge.c) exactly as the iOS targets compile them, driven the way
  * ClassicEngine.swift drives them from the extension.
  *
  *   onecore_test DATA_DIR say VOICE[:emotion] RATE SEMITONES "text" out.wav [notrim]
- *   onecore_test DATA_DIR selftest OUTDIR       every check below, all eight voices; exit status = failures
+ *   onecore_test DATA_DIR selftest OUTDIR       every check below, all thirteen voices; exit status = failures
  *   onecore_test DATA_DIR threads [reps]        two voices on two threads (run it under TSan: make onecore-tsan)
  *   onecore_test DATA_DIR bench [seconds]       open time, first-audio latency, real-time factor, memory per voice
  *   onecore_test DATA_DIR eva OUTDIR            Eva only: her checks (self-test of the models, models vs rules, the long
@@ -32,8 +33,9 @@
 #define CV_ASAN 0
 #endif
 
-#define NVOICES 8
-static const char *const VOICES[NVOICES] = {"David", "Zira", "Mark", "Hazel", "George", "Susan", "Eva", "Sarah"};
+#define NVOICES 13
+static const char *const VOICES[NVOICES] = {"David", "Zira", "Mark", "Hazel", "George", "Susan", "Eva", "Sarah",
+                                            "Catherine", "James", "Linda", "Richard", "Matilda"};
 /* only the en-US voice files carry an [EmotionRecipe] (Eva's too) */
 static int has_emotions(const char *voice) { return zira_tts_voice_lcid(voice) == 1033; }
 static const char *const EMOTIONS[3] = {"happy", "sad", "angry"};
@@ -193,17 +195,19 @@ static int run_threads(const char *dir, int reps)
     const char *tb = "On March 3rd, 2021 at 10:30 am, 1,234 people paid $56.78 each. Is that right?";
     /* pairs: two different voices (float David + fixed-point Zira), the same voice twice (Mark, one happy), the two
        locales at once (float Hazel + David), and the two fixed-point en-GB voices */
-    /* ...and Eva (neural back end) next to David, and Eva twice; Sarah (neural, en-GB) next to Hazel, and Sarah + Eva */
-    thr_arg pairs[8][2] = {{{dir, "David", NULL, reps, 0, ta, 0}, {dir, "Zira", NULL, reps, 0, tb, 0}},
+    /* ...and Eva (neural back end) next to David, and Eva twice; Sarah (neural, en-GB) next to Hazel, and Sarah + Eva;
+       Matilda (neural, en-AU, LSF order 24) next to Catherine (same language data) */
+    thr_arg pairs[9][2] = {{{dir, "David", NULL, reps, 0, ta, 0}, {dir, "Zira", NULL, reps, 0, tb, 0}},
                            {{dir, "Mark", NULL, reps, 0, tb, 0}, {dir, "Mark", "happy", reps, 0, ta, 0}},
                            {{dir, "Hazel", NULL, reps, 0, ta, 0}, {dir, "David", NULL, reps, 0, tb, 0}},
                            {{dir, "George", NULL, reps, 0, tb, 0}, {dir, "Susan", NULL, reps, 0, ta, 0}},
                            {{dir, "Eva", NULL, reps, 0, ta, 0}, {dir, "David", NULL, reps, 0, tb, 0}},
                            {{dir, "Eva", NULL, reps, 0, tb, 0}, {dir, "Eva", "happy", reps, 0, ta, 0}},
                            {{dir, "Sarah", NULL, reps, 0, ta, 0}, {dir, "Hazel", NULL, reps, 0, tb, 0}},
-                           {{dir, "Sarah", NULL, reps, 0, tb, 0}, {dir, "Eva", NULL, reps, 0, ta, 0}}};
+                           {{dir, "Sarah", NULL, reps, 0, tb, 0}, {dir, "Eva", NULL, reps, 0, ta, 0}},
+                           {{dir, "Matilda", NULL, reps, 0, ta, 0}, {dir, "Catherine", NULL, reps, 0, tb, 0}}};
     int k;
-    for (k = 0; k < 8; k++) {
+    for (k = 0; k < 9; k++) {
         thr_arg *single = pairs[k], par[2];
         pthread_t th[2];
         char what[256];
@@ -282,7 +286,7 @@ static void selftest_voice(const char *dir, const char *voice, const char *od)
         for (k = 0; k < 3; k++) refused &= cvo_voice_set_emotion(v, EMOTIONS[k]) == -1;
         speak(v, t, 0, 0, 1, &b);
         snprintf(what, sizeof what, "no [EmotionRecipe] in its INI: happy / sad / angry refused, speaks neutrally (bit-identical)");
-        check(refused && zira_tts_voice_lcid(voice) == 2057 && same(&a, &b), what);
+        check(refused && zira_tts_voice_lcid(voice) != 1033 && same(&a, &b), what);
     } else {
         const char *t = "I can't believe we finally made it here today.";
         speak(v, t, 0, 0, 1, &a);

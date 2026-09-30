@@ -63,7 +63,8 @@ VoiceData/      SAPI 5: Sam, Mike, Mary (.spd, .sdf) and the two .LXA lexicons
 SAPI4Voices/    SAPI 4: msttssyn.dll and its .vce / .cfg voice files    (make -C SAPI4 bundle)
 TruVoiceData/   tvdata.s, generated from the TruVoice engine tables        (make truvoice-data)
 AnnaVoice/      Anna: the eleven M1033DSK.* files from Windows 7            (make anna-data)
-OneCoreVoice/   Windows 10 / 11 OneCore voices and language data            (make onecore-data)
+OneCoreVoice/   Windows 10 / 11 OneCore voices and language data            (make onecore-data; the en-AU / en-CA ones:
+                tools/onecore_lof_stage.py, from the Windows 11 Languages and Optional Features image)
 NeuralVoices/   Windows 11 natural voice packages and their model key       (make neural-stage)
 NeuralSDK/      Microsoft's embedded Speech SDK libraries, ios/ and macos/  (make neural-stage)
 ```
@@ -118,8 +119,8 @@ tools/        data staging, hash checks, table and patch generators
 - The SAPI 4 voices: Microsoft's 1999 engine `msttssyn.dll`, decompiled to C in a separate project of mine, sapi4-decomp. The engine still reads its data from the original DLL and voice files, which are Microsoft's.
 - TruVoice (the Microsoft Agent voices): engine from [OpenTV](https://github.com/RetroBunn/tv-decomp) by RetroBunn. The engine tables are Centigram's, whose TruVoice business went to Lernout & Hauspie and later ScanSoft / Nuance.
 - Anna: engine from [ms-ana-decomp](https://github.com/KamiKitsune420/ms-ana-decomp) by KamiKitsune420. Voice data by Microsoft.
-- David, Zira, Mark, Hazel, George and Susan (OneCore): engine from [ms-david-zira-decomp](https://github.com/KamiKitsune420/ms-david-zira-decomp) by KamiKitsune420, plus Eva and Sarah, which I added. Voice data by Microsoft.
-- Jenny, Aria, Guy, Sonia and Ryan (Windows 11 natural voices): these run on Microsoft's embedded Speech SDK. Voices and SDK by Microsoft.
+- David, Zira, Mark, Hazel, George and Susan (OneCore): engine from [ms-david-zira-decomp](https://github.com/KamiKitsune420/ms-david-zira-decomp) by KamiKitsune420, plus Eva, Sarah, Matilda, and the Australian and Canadian voices Catherine, James, Linda and Richard, which I added. Voice data by Microsoft.
+- Jenny, Aria, Guy, Sonia and Ryan (Windows 11 natural voices), and Neerja and Prabhat (Indian English natural voices): these run on Microsoft's embedded Speech SDK. Voices and SDK by Microsoft.
 
 None of the voice data, original engine files or SDKs are in this repo, and this project doesn't license them. They belong to their owners. The pre-built downloads on quintonwilliams.me do bundle them, for personal use, and they will be removed if a rights holder asks.
 
