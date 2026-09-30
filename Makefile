@@ -390,3 +390,12 @@ neural-bench: build/mac/neural_test
 	./build/mac/neural_test $(CURDIR) bench
 
 .PHONY: neural-stage neural-data neural-test neural-threads neural-bench
+
+# A release: builds the IPA and the notarized Mac zip, publishes them with the AltStore source and the downloads page
+# (tools/release.sh; settings in tools/release.local).
+#   make release VERSION=1.1 NOTES="What's new"            DRYRUN=1 builds and shows the changes without publishing
+release:
+	@test -n "$(VERSION)" -a -n "$(NOTES)" || { echo 'usage: make release VERSION=1.1 NOTES="What'"'"'s new" [DRYRUN=1]'; exit 2; }
+	tools/release.sh "$(VERSION)" "$(NOTES)" $(if $(DRYRUN),--dry-run)
+
+.PHONY: release

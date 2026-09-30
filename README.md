@@ -87,6 +87,19 @@ The Makefile also builds each engine for the Mac with sanitizers and renders sam
 
 The build produces Sapple.app on iOS and macOS. Inside the code the project, its targets and the extension (ClassicVoicesExtension.appex) are still called ClassicVoices, and the bundle identifiers are unchanged.
 
+## Releasing
+
+One command builds and publishes a release: the IPA, the notarized Mac zip, the AltStore / SideStore source and the downloads page.
+
+```
+make release VERSION=1.1 NOTES="What's new in this version." DRYRUN=1   # build and show the changes, publish nothing
+make release VERSION=1.1 NOTES="What's new in this version."            # the real thing
+```
+
+It needs every voice data folder, and the server and notarization settings in `tools/release.local` (the list is at the top of `tools/release.sh`). It sets the version in `project.yml` and the next build number, builds both apps, reads the version back out of the built apps, adds the new entry to the top of `source.json`, updates the page, backs both up on the server before replacing them, and checks the live source and the IPA download afterwards. It refuses a version that is already in the source. AltStore and SideStore show the update the next time they refresh the source. Commit `project.yml` and `README.md` afterwards.
+
+Mac updates through Sparkle aren't set up yet; Mac users download the new zip from the page.
+
 ## Project layout
 
 ```
