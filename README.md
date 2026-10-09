@@ -12,8 +12,8 @@ Most of the engines are C reconstructions of the original Windows engines, which
 
 Ready to install builds are on the downloads page: https://quintonwilliams.me/sapple/
 
-- iPhone and iPad: [Sapple-1.0.ipa](https://quintonwilliams.me/sapple/Sapple-1.0.ipa)
-- Mac, Apple Silicon only: [Sapple-1.0-mac.zip](https://quintonwilliams.me/sapple/Sapple-1.0-mac.zip)
+- iPhone and iPad: [Sapple-1.1.1.ipa](https://quintonwilliams.me/sapple/Sapple-1.1.1.ipa)
+- Mac, Apple Silicon only: [Sapple-1.1.1-mac.zip](https://quintonwilliams.me/sapple/Sapple-1.1.1-mac.zip)
 - AltStore source: `https://quintonwilliams.me/sapple/source.json`
 
 The downloads page lists each file's size and SHA-256.
