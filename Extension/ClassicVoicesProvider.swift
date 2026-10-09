@@ -74,14 +74,14 @@ public final class ClassicVoicesProvider: AVSpeechSynthesisProviderAudioUnit {
             out.update(repeating: 0, count: frames)
 
             let (n, done) = stream.read(into: out, frames: frames, maxWait: 0.25)
-            if n == 0 && !done {
-                // The engine has not caught up (never expected: it runs far faster than real time).
-                // Hand back silence rather than stalling the host.
+            if !done {
+                // A full buffer, padded with silence if the engine has not caught up within the wait (not expected:
+                // read waits for a full buffer and the engines run far faster than real time). Only the end is short.
                 abl[0].mDataByteSize = UInt32(frames * MemoryLayout<Float32>.size)
                 return noErr
             }
             abl[0].mDataByteSize = UInt32(n * MemoryLayout<Float32>.size)
-            if done { actionFlags.pointee = .offlineUnitRenderAction_Complete }
+            actionFlags.pointee = .offlineUnitRenderAction_Complete
             return noErr
         }
     }

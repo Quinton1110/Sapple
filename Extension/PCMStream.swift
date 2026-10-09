@@ -104,13 +104,16 @@ final class PCMStream {
 
     // MARK: - Consumer (render block)
 
-    /// Copies up to `frames` samples into `out`. Waits (at most `maxWait`) if the producer has not
-    /// caught up yet. `done` = the utterance is over and everything has been handed out.
+    /// Copies up to `frames` samples into `out`. Until the utterance is finished, waits (at most `maxWait`) for a FULL
+    /// buffer, not just any audio: the host pulls far faster than real time, and the neural voices' SDK hands its audio
+    /// over in bursts (~400 ms each), so a read that returned whatever was there came back short at nearly every burst -
+    /// and the rest of the host's buffer played as a few ms of silence, a click (heard as crackle; 2026-10-09).
+    /// `done` = the utterance is over and everything has been handed out.
     func read(into out: UnsafeMutablePointer<Float32>, frames: Int, maxWait: TimeInterval) -> (count: Int, done: Bool) {
         cond.lock(); defer { cond.unlock() }
-        if !finished && buf.count == readPos {
+        if !finished && buf.count - readPos < frames {
             let deadline = Date(timeIntervalSinceNow: maxWait)
-            while !finished && buf.count == readPos {
+            while !finished && buf.count - readPos < frames {
                 if !cond.wait(until: deadline) { break }
             }
         }
