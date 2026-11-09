@@ -88,6 +88,14 @@ zf2_voice *zf2_voice_load(const char *voicepath)
         n = (long)fread(ini, 1, (size_t)n, f);
         ini[n] = 0;
         fclose(f);
+        if (n >= 2 && (unsigned char)ini[0] == 0xff && (unsigned char)ini[1] == 0xfe) {
+            long i, j = 0;
+            for (i = 2; i + 1 < n; i += 2) {
+                unsigned c = (unsigned char)ini[i] | ((unsigned char)ini[i + 1] << 8);
+                if (c && c < 128) ini[j++] = (char)c;
+            }
+            ini[j] = 0;
+        }
     }
     for (k = 0; k < 8; k++) v->sil[k] = ini_int(ini, "SilenceLength", silkey[k], sildef[k]);
     v->punc_interm_raw = v->sil[Z2_PC_PUNCINTERM];
@@ -105,6 +113,7 @@ zf2_voice *zf2_voice_load(const char *voicepath)
         v->ps.sil = Z2_PH_SIL;
         v->ps.st1 = Z2_PH_ST1;
         v->ps.sp = Z2_PH_SP;
+        v->ps.t1 = -1;
     }
     v->short_pause_on = ini_bool(ini, "ShortPause", "Enable", 0);
     v->short_pause = v->short_pause_on ? v->ps.sp : -1;
@@ -135,7 +144,7 @@ int zf2_voice_set_phoneset(zf2_voice *v, const uint8_t *res, size_t size)
     n = (uint32_t)res[4] | (uint32_t)res[5] << 8 | (uint32_t)res[6] << 16 | (uint32_t)res[7] << 24;
     if (rs < 52 || n == 0 || n > Z2_PS_MAX || 8 + (size_t)rs * n > size) return -1;
     memset(&ps, 0, sizeof ps);
-    ps.sil = ps.st1 = ps.sp = -1;
+    ps.sil = ps.st1 = ps.sp = ps.t1 = -1;
     for (k = 0; k < n; k++) {
         const uint8_t *r = res + 8 + (size_t)rs * k;
         unsigned id = (unsigned)r[0] | (unsigned)r[1] << 8;
@@ -151,8 +160,11 @@ int zf2_voice_set_phoneset(zf2_voice *v, const uint8_t *res, size_t size)
         if (!strcmp(ps.name[id], "-SIL-")) ps.sil = (int)id;
         else if (!strcmp(ps.name[id], "1")) ps.st1 = (int)id;
         else if (!strcmp(ps.name[id], "-SP-")) ps.sp = (int)id;
+        if (ps.t1 < 0 && (ps.flags[id] & 0x80000000u)) ps.t1 = (int)id;
+        if (ps.st1 < 0 && (ps.flags[id] & (0x10000000u | 0x20000000u))) ps.st1 = (int)id;
     }
-    if (ps.sil < 0 || ps.st1 < 0) return -1;
+    if (ps.sil < 0) return -1;
+    if (ps.st1 < 0) ps.st1 = 0;
     v->ps = ps;
     v->short_pause = v->short_pause_on ? v->ps.sp : -1;
     return 0;

@@ -126,11 +126,25 @@ let CLASSIC_VOICES: [ClassicVoiceDef] = [
     ClassicVoiceDef(slug: "robosoft6",      display: "RoboSoft Six (SAPI 5)",    spd: "Sam",  effect: "robosoft6", basePitch: 100, female: false),
     ClassicVoiceDef(slug: "male_whisper",   display: "Male Whisper (SAPI 5)",    spd: "Mike", effect: "whisper",   basePitch: 0,   female: false),
     ClassicVoiceDef(slug: "female_whisper", display: "Female Whisper (SAPI 5)",  spd: "Mary", effect: "whisper",   basePitch: 0,   female: true),
-] + [ANNA_VOICE] + ONECORE_VOICES + SAPI4_VOICES + TRUVOICE_VOICES + NEURAL_VOICES
+    ClassicVoiceDef(slug: "betty",          display: "Betty (SAPI 5)",           spd: "Mary", effect: "none",      basePitch: 110, female: true),
+    ClassicVoiceDef(slug: "beverly",        display: "Beverly (SAPI 5)",         spd: "Mary", effect: "none",      basePitch: 100, female: true),
+    ClassicVoiceDef(slug: "brutus",         display: "Brutus (SAPI 5)",          spd: "Mike", effect: "none",      basePitch: 100, female: false),
+    ClassicVoiceDef(slug: "freddy",         display: "Freddy (SAPI 5)",          spd: "Mike", effect: "none",      basePitch: 189, female: false),
+    ClassicVoiceDef(slug: "jack",           display: "Jack (SAPI 5)",            spd: "Sam",  effect: "none",      basePitch: 110, female: false),
+    ClassicVoiceDef(slug: "junior",         display: "Junior (SAPI 5)",          spd: "Sam",  effect: "none",      basePitch: 189, female: false),
+] + [ANNA_VOICE] + PROTALKER_VOICES + ONECORE_VOICES + SAPI4_VOICES + TRUVOICE_VOICES + NEURAL_VOICES
 
 /// Microsoft Anna (Windows Vista / 7, SAPI 5.3): one voice, the engine's own. Slug "anna" is permanent.
 let ANNA_VOICE = ClassicVoiceDef(slug: "anna", display: "Anna", spd: "", effect: "none", basePitch: 0,
                                  female: true, engine: .anna)
+
+/// IBM ProTALKER 97 Japanese voices (読み秀君 / 読み子ちゃん) running via Tts_mgr.dll in SAPI4/emu.
+let PROTALKER_VOICES: [ClassicVoiceDef] = [
+    ClassicVoiceDef(slug: "protalk_hide", display: "ProTalker 読み秀君",     spd: "", effect: "none", basePitch: 0,
+                    female: false, engine: .onecore, oneCoreVoice: "ProTalker_Hide", language: "ja-JP"),
+    ClassicVoiceDef(slug: "protalk_ko",   display: "ProTalker 読み子ちゃん", spd: "", effect: "none", basePitch: 0,
+                    female: true,  engine: .onecore, oneCoreVoice: "ProTalker_Ko",   language: "ja-JP"),
+]
 
 /// The OneCore voices whose INIs carry the [EmotionRecipe] presets happy / sad / angry.
 let ONECORE_EMOTION_VOICES: Set<String> = ["David", "Zira", "Mark", "Eva"]
@@ -147,12 +161,39 @@ let ONECORE_EMOTION_VOICES: Set<String> = ["David", "Zira", "Mark", "Eva"]
 /// has no presets; LCID 3081 and the en-AU data Catherine and James use).
 /// Only David, Zira, Mark and Eva have emotion presets (ONECORE_EMOTION_VOICES), whatever their language tag.
 /// Slugs "onecore_<voice>" and "onecore_<voice>_<emotion>" are permanent.
-let ONECORE_VOICES: [ClassicVoiceDef] = [("David", false, "en-US"), ("Zira", true, "en-US"), ("Mark", false, "en-US"),
-                                         ("Hazel", true, "en-GB"), ("George", false, "en-GB"), ("Susan", true, "en-GB"),
-                                         ("Eva", true, "en-US"), ("Sarah", true, "en-GB"),
-                                         ("Catherine", true, "en-AU"), ("James", false, "en-AU"),
-                                         ("Linda", true, "en-US"), ("Richard", false, "en-US"),
-                                         ("Matilda", true, "en-AU")]
+let ONECORE_VOICES: [ClassicVoiceDef] = [
+    ("David", false, "en-US"), ("Zira", true, "en-US"), ("Mark", false, "en-US"),
+    ("Hazel", true, "en-GB"), ("George", false, "en-GB"), ("Susan", true, "en-GB"),
+    ("Eva", true, "en-US"), ("Sarah", true, "en-GB"),
+    ("Catherine", true, "en-AU"), ("James", false, "en-AU"),
+    ("Linda", true, "en-US"), ("Richard", false, "en-US"),
+    ("Matilda", true, "en-AU"),
+    ("Naayf", false, "ar-SA"), ("Hoda", true, "ar-SA"), ("Ivan", false, "bg-BG"),
+    ("Herena", true, "ca-ES"), ("Jakub", false, "cs-CZ"), ("Helle", true, "da-DK"),
+    ("Michael", false, "de-DE"), ("Karsten", false, "de-DE"), ("Hedda", true, "de-DE"),
+    ("Katja", true, "de-DE"), ("KatjaV2", true, "de-DE"), ("Stefan", false, "de-DE"),
+    ("Stefanos", false, "el-GR"), ("EvaCA", true, "en-US"), ("Sean", false, "en-IE"),
+    ("Heera", true, "en-IN"), ("Koyal", true, "en-IN"), ("Ravi", false, "en-IN"),
+    ("AnaES", true, "es-ES"), ("Helena", true, "es-ES"), ("Laura", true, "es-ES"),
+    ("Pablo", false, "es-ES"), ("Mila", true, "es-MX"), ("Raul", false, "es-MX"),
+    ("Sabina", true, "es-MX"), ("Heidi", true, "fi-FI"), ("Caroline", true, "fr-CA"),
+    ("Claude", false, "fr-CA"), ("NathalieCA", true, "fr-CA"), ("Hortense", true, "fr-FR"),
+    ("Julie", true, "fr-FR"), ("Nathalie", true, "fr-FR"), ("Paul", false, "fr-FR"),
+    ("Guillaume", false, "fr-FR"), ("Asaf", false, "he-IL"), ("Hemant", false, "hi-IN"),
+    ("Kalpana", true, "hi-IN"), ("Matej", false, "hr-HR"), ("Szabolcs", false, "hu-HU"),
+    ("Andika", false, "id-ID"), ("Cosimo", false, "it-IT"), ("Elsa", true, "it-IT"),
+    ("ElsaV2", true, "it-IT"), ("Ayumi", true, "ja-JP"), ("Haruka", true, "ja-JP"),
+    ("Ichiro", false, "ja-JP"), ("Sayaka", true, "ja-JP"), ("Heami", true, "ko-KR"),
+    ("Rizwan", false, "ms-MY"), ("Jon", false, "nb-NO"), ("Bart", false, "nl-BE"),
+    ("Frank", false, "nl-NL"), ("Adam", false, "pl-PL"), ("Paulina", true, "pl-PL"),
+    ("AnaBR", true, "pt-BR"), ("Daniel", false, "pt-BR"), ("Maria", true, "pt-BR"),
+    ("Helia", true, "pt-PT"), ("Andrei", false, "ro-RO"), ("Irina", true, "ru-RU"),
+    ("Pavel", false, "ru-RU"), ("Filip", false, "sk-SK"), ("Lado", false, "sl-SI"),
+    ("Bengt", false, "sv-SE"), ("Valluvar", false, "ta-IN"), ("Pattara", false, "th-TH"),
+    ("Tolga", false, "tr-TR"), ("An", false, "vi-VN"), ("Hongyu", true, "zh-CN"),
+    ("Huihui", true, "zh-CN"), ("Kangkang", false, "zh-CN"), ("Yaoyao", true, "zh-CN"),
+    ("Danny", false, "zh-HK"), ("Tracy", true, "zh-HK")
+]
     .flatMap { name, female, language in
         (ONECORE_EMOTION_VOICES.contains(name) ? ["", "happy", "sad", "angry"] : [""]).map { emotion in
             ClassicVoiceDef(slug: "onecore_" + name.lowercased() + (emotion.isEmpty ? "" : "_" + emotion),
@@ -217,7 +258,15 @@ let NEURAL_VOICES: [ClassicVoiceDef] = {
 #else
     return [("Jenny", true, "en-US"), ("Aria", true, "en-US"), ("Guy", false, "en-US"),
             ("Sonia", true, "en-GB"), ("Ryan", false, "en-GB"),
-            ("Neerja", true, "en-IN"), ("Prabhat", false, "en-IN")].map { name, female, language in
+            ("Neerja", true, "en-IN"), ("Prabhat", false, "en-IN"),
+            ("Nanami", true, "ja-JP"), ("Keita", false, "ja-JP"),
+            ("Xiaoxiao", true, "zh-CN"), ("Yunxi", false, "zh-CN"),
+            ("KatjaNatural", true, "de-DE"), ("Conrad", false, "de-DE"),
+            ("Elvira", true, "es-ES"), ("Alvaro", false, "es-ES"),
+            ("Dalia", true, "es-MX"), ("Jorge", false, "es-MX"),
+            ("Denise", true, "fr-FR"), ("Henri", false, "fr-FR"),
+            ("SunHi", true, "ko-KR"), ("InJoon", false, "ko-KR"),
+            ("Francisca", true, "pt-BR"), ("Antonio", false, "pt-BR")].map { name, female, language in
         ClassicVoiceDef(slug: "neural_" + name.lowercased(), display: name, spd: "", effect: "none", basePitch: 0,
                         female: female, engine: .neural, neuralVoice: name, language: language)
     }

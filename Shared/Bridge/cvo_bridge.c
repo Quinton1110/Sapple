@@ -1,7 +1,7 @@
-/* ClassicVoices OneCore bridge (Microsoft David, Zira, Mark; Hazel, George, Susan; Eva; Sarah; Catherine, James; Linda,
- * Richard; Matilda) - see cvo_bridge.h. */
+/* ClassicVoices OneCore + ProTALKER 97 bridge - see cvo_bridge.h. */
 #include "cvo_bridge.h"
 #include "zira_tts.h"
+#include "protalker_tts.h"
 #include "cv_resample.h"
 
 #include <math.h>
@@ -11,16 +11,28 @@
 
 struct cvo_voice {
     zira_tts *t;
+    protalker_tts *pt;
     cv_resampler rs;   /* 16000 -> 22050 */
 };
 
 cvo_voice *cvo_voice_open(const char *dir, const char *voice, char *err, size_t errlen)
 {
     cvo_voice *v;
-    if (!voice || (strcmp(voice, "David") && strcmp(voice, "Zira") && strcmp(voice, "Mark") && strcmp(voice, "Hazel") &&
-                   strcmp(voice, "George") && strcmp(voice, "Susan") && strcmp(voice, "Eva") &&
-                   strcmp(voice, "Sarah") && strcmp(voice, "Catherine") && strcmp(voice, "James") &&
-                   strcmp(voice, "Linda") && strcmp(voice, "Richard") && strcmp(voice, "Matilda"))) {
+    if (!voice) {
+        if (err && errlen) snprintf(err, errlen, "unknown OneCore voice");
+        return NULL;
+    }
+    if (protalker_tts_is_voice(voice)) {
+        v = calloc(1, sizeof *v);
+        if (!v) return NULL;
+        v->pt = protalker_tts_open(dir, voice, err, errlen);
+        if (!v->pt) {
+            free(v);
+            return NULL;
+        }
+        return v;
+    }
+    if (!zira_tts_voice_lcid(voice)) {
         if (err && errlen) snprintf(err, errlen, "unknown OneCore voice");
         return NULL;
     }
@@ -47,7 +59,8 @@ cvo_voice *cvo_voice_open(const char *dir, const char *voice, char *err, size_t 
 void cvo_voice_close(cvo_voice *v)
 {
     if (!v) return;
-    zira_tts_close(v->t);
+    if (v->pt) protalker_tts_close(v->pt);
+    if (v->t) zira_tts_close(v->t);
     cv_rs_free(&v->rs);
     free(v);
 }
@@ -61,6 +74,7 @@ int cvo_voice_sample_rate(const cvo_voice *v)
 int cvo_voice_set_emotion(cvo_voice *v, const char *emotion)
 {
     if (!v) return -1;
+    if (v->pt) return (!emotion || !*emotion) ? 0 : -1;
     if (zira_tts_set_emotion(v->t, emotion && *emotion ? emotion : NULL) == 0) return 0;
     zira_tts_set_emotion(v->t, NULL);
     return -1;
@@ -97,6 +111,15 @@ static int on_engine_pcm(const int16_t *pcm, size_t n, void *user)
     return x->stopped;
 }
 
+/* 22050 Hz from ProTALKER 97 -> trimmer -> caller */
+static int on_protalker_pcm(const int16_t *pcm, size_t n, void *user)
+{
+    speak_ctx *x = user;
+    if (x->stopped) return 1;
+    if (n && cv_trimmer_feed(x->t, pcm, n)) x->stopped = 1;
+    return x->stopped;
+}
+
 int cvo_voice_speak(cvo_voice *v, const char *utf8, double sapi_rate, double semitones, int trim, cv_pcm_fn fn,
                     void *user)
 {
@@ -105,15 +128,13 @@ int cvo_voice_speak(cvo_voice *v, const char *utf8, double sapi_rate, double sem
     zira_callbacks cb;
     int rc;
     if (!v || !utf8 || !fn) return -1;
-    clean = cv_sanitize_alloc(utf8);
+    clean = cv_sanitize_unicode_alloc(utf8);
     if (!clean) return -1;
     if (!*clean) { /* nothing speakable: no audio, and never any stand-in text */
         free(clean);
         return 0;
     }
     if (!(sapi_rate == sapi_rate)) sapi_rate = 0;
-    zira_tts_set_rate_f(v->t, sapi_rate < -10 ? -10 : sapi_rate > 18 ? 18 : sapi_rate);
-    zira_tts_set_pitch(v->t, cvo_pitch_for_semitones(semitones));
     memset(&x, 0, sizeof x);
     x.v = v;
     x.t = cv_trimmer_new(trim, fn, user);
@@ -121,6 +142,18 @@ int cvo_voice_speak(cvo_voice *v, const char *utf8, double sapi_rate, double sem
         free(clean);
         return -1;
     }
+    if (v->pt) {
+        rc = protalker_tts_speak(v->pt, clean,
+                                 sapi_rate < -10 ? -10 : sapi_rate > 18 ? 18 : sapi_rate,
+                                 semitones, on_protalker_pcm, &x);
+        if (rc == 0 && cv_trimmer_finish(x.t)) rc = 1;
+        if (x.failed) rc = -1;
+        cv_trimmer_free(x.t);
+        free(clean);
+        return rc;
+    }
+    zira_tts_set_rate_f(v->t, sapi_rate < -10 ? -10 : sapi_rate > 18 ? 18 : sapi_rate);
+    zira_tts_set_pitch(v->t, cvo_pitch_for_semitones(semitones));
     cv_rs_reset(&v->rs);
     cb.audio = on_engine_pcm;
     cb.event = NULL;

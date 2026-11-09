@@ -24,6 +24,8 @@ settings:
       - "$(SRCROOT)/Engine/sapi4/lib"
       - "$(SRCROOT)/Engine/anna"
       - "$(SRCROOT)/Engine/onecore"
+      - "$(SRCROOT)/Engine/protalker"
+      - "$(SRCROOT)/SAPI4/emu"
       - "$(SRCROOT)/Engine/opentv/include"
     SWIFT_OBJC_BRIDGING_HEADER: Shared/Bridge/ClassicVoices-Bridging-Header.h
 
@@ -41,7 +43,7 @@ targetTemplates:
         excludes: ["Info.plist", "Info-macOS.plist"]
       # cv4_bridge.c drives the SAPI 4 engine in the x86 interpreter (SAPI4/emu): the tests' old path, not in the app.
       - path: Shared
-        excludes: ["Bridge/cv4_bridge.c", "Bridge/cv4_bridge.h"]
+        excludes: ["Bridge/cv4_bridge.c", "Bridge/cv4_bridge.h", "Bridge/sapple_multilang_init.c"]
       - path: Engine/sam
         excludes: ["LICENSE"]
         compilerFlags: ["-w"]
@@ -65,6 +67,11 @@ targetTemplates:
       - path: Engine/onecore
         excludes: ["LICENSE"]
         compilerFlags: ["-w", "-ffp-contract=off", "-fno-fast-math"]
+      - path: Engine/protalker
+        compilerFlags: ["-w"]
+      - path: SAPI4/emu
+        excludes: ["sapi4_tts.c", "sapi4_tts.h", "sapi4_speak.c", "lockstep.c"]
+        compilerFlags: ["-w", "-std=c11", "-O2"]
       # L&H / Centigram TruVoice on OpenTV (github.com/RetroBunn/tv-decomp, pinned in NOTICE): the engine decompiled to
       # portable C. Upstream's flags: signed arithmetic wraps and no strict aliasing (the decompiled code relies on both),
       # -O2 as upstream verified it. Its tables are NOT here but in TruVoiceData (below).
@@ -100,7 +107,7 @@ targetTemplates:
         excludes: ["Info.plist", "Info-macOS.plist"]   # processed as INFOPLIST_FILE, never a resource
       # cv4_bridge.c drives the SAPI 4 engine in the x86 interpreter (SAPI4/emu): the tests' old path, not in the app.
       - path: Shared
-        excludes: ["Bridge/cv4_bridge.c", "Bridge/cv4_bridge.h"]
+        excludes: ["Bridge/cv4_bridge.c", "Bridge/cv4_bridge.h", "Bridge/sapple_multilang_init.c"]
       - path: Engine/sam
         excludes: ["LICENSE"]
         compilerFlags: ["-w"]
@@ -113,6 +120,11 @@ targetTemplates:
       - path: Engine/onecore
         excludes: ["LICENSE"]
         compilerFlags: ["-w", "-ffp-contract=off", "-fno-fast-math"]
+      - path: Engine/protalker
+        compilerFlags: ["-w"]
+      - path: SAPI4/emu
+        excludes: ["sapi4_tts.c", "sapi4_tts.h", "sapi4_speak.c", "lockstep.c"]
+        compilerFlags: ["-w", "-std=c11", "-O2"]
       - path: Engine/opentv
         excludes: ["LICENSE", "NOTICE", "src/engine.fields"]
         compilerFlags: ["-w", "-std=gnu11", "-O2", "-fwrapv", "-fno-strict-aliasing", "-I$(SRCROOT)/Engine/opentv/src",

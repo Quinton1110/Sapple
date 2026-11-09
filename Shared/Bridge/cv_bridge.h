@@ -65,6 +65,7 @@ int cv_sing_is_score(const char *utf8);
 /* Sanitizes UTF-8 into a malloc'd string (free with cv_free). Never returns NULL for non-NULL input
  * unless out of memory. */
 char *cv_sanitize_alloc(const char *utf8);
+char *cv_sanitize_unicode_alloc(const char *utf8);
 void cv_free(void *p);
 
 /* UTF-8 (already sanitized) -> Windows-1252, malloc'd; characters outside it become spaces. (The SAPI 4 and TruVoice

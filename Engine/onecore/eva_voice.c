@@ -161,12 +161,35 @@ static void eva_heq_free(EvaHeq *h) { eva_unmap_file(h->file, h->maplen); memset
 
 /* minimal INI reader for the Eva keys the ZbConfig loader does not keep */
 static int ini_int(const char *path, const char *sec, const char *key, int def) {
-    FILE *f = fopen(path, "r");
+    FILE *f = fopen(path, "rb");
     char line[512], cur[128] = "";
+    uint8_t *raw;
+    long rawsz = 0, pos = 0;
     int v = def;
     if (!f) return def;
-    while (fgets(line, sizeof line, f)) {
+    fseek(f, 0, SEEK_END); rawsz = ftell(f); fseek(f, 0, SEEK_SET);
+    if (rawsz <= 0) { fclose(f); return def; }
+    raw = (uint8_t *)malloc((size_t)rawsz + 1);
+    if (!raw) { fclose(f); return def; }
+    rawsz = (long)fread(raw, 1, (size_t)rawsz, f);
+    fclose(f);
+    if (rawsz >= 2 && raw[0] == 0xff && raw[1] == 0xfe) {
+        long i, j = 0;
+        for (i = 2; i + 1 < rawsz; i += 2) {
+            uint16_t ch = (uint16_t)(raw[i] | (raw[i + 1] << 8));
+            if (ch && ch < 128) raw[j++] = (uint8_t)ch;
+        }
+        rawsz = j;
+    }
+    while (pos < rawsz) {
+        size_t l = 0;
         char *p = line, *q;
+        while (pos < rawsz && raw[pos] != '\n') {
+            if (raw[pos] != '\r' && l + 1 < sizeof line) line[l++] = (char)raw[pos];
+            pos++;
+        }
+        if (pos < rawsz && raw[pos] == '\n') pos++;
+        line[l] = 0;
         while (*p == ' ' || *p == '\t') p++;
         if (*p == '[') { q = strchr(p, ']'); if (q) { *q = 0; snprintf(cur, sizeof cur, "%s", p + 1); } continue; }
         q = strchr(p, '=');
@@ -175,7 +198,7 @@ static int ini_int(const char *path, const char *sec, const char *key, int def) 
         for (char *r = q - 1; r >= p && (*r == ' ' || *r == '\t'); r--) *r = 0;
         if (!strcmp(p, key)) v = atoi(q + 1);
     }
-    fclose(f);
+    free(raw);
     return v;
 }
 
@@ -251,14 +274,15 @@ EvaModel *eva_model_open(const char *vp, int lcid, zf2_voice *vf, char *err, int
         || e->nnm.stream[e->sF].nseg != 3
         || (e->sM >= 0 && (e->nnm.stream[e->sM].nseg != 3 || e->nnm.stream[e->sM].dim[0] > ZB_MBE_MAXBANDS)))
         { snprintf(err, errlen, "unexpected NNM / TDAT layout"); goto fail; }
-    snprintf(path, sizeof path, "%s.%s", vp, ext[0]);
-    e->has_crf = file_exists(path);
-    if (e->has_crf) {   /* statistical prosody models: CLinguisticProsodyTagger model runners (loc model table: BR2, TON, ACL) */
+    {   /* statistical prosody models: load whichever of BR2, TON, ACL exist for this voice */
         EvaCrf **slot[3] = {&e->prosody.br2, &e->prosody.ton, &e->prosody.acl};
         for (int k = 0; k < 3; k++) {
-            snprintf(path, sizeof path, "%s.%s", vp, ext[k]);
-            *slot[k] = eva_crf_load(path, err, errlen);
-            if (!*slot[k]) goto fail;
+            data_path(path, sizeof path, vp, ext[k]);
+            if (file_exists(path)) {
+                *slot[k] = eva_crf_load(path, err, errlen);
+                if (!*slot[k]) goto fail;
+                e->has_crf = 1;
+            }
         }
     }
     e->f_state = e->nnm.nfeat - 3; e->f_frames = e->nnm.nfeat - 2; e->f_pct = e->nnm.nfeat - 1;

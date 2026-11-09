@@ -36,6 +36,8 @@ typedef struct cvn_voice cvn_voice;
  * voice: "Jenny", "Aria", "Guy", "Sonia", "Ryan", "Neerja", "Prabhat". NULL and err filled on failure. */
 cvn_voice *cvn_voice_open(const char *sdk_dir, const char *data_dir, const char *onecore_dir, const char *work_dir,
                           const char *voice, char *err, size_t errlen);
+void cvn_set_extra_dir(const char *extra_nv_dir);
+void cvn_set_extra_oc_dir(const char *extra_oc_dir);
 void cvn_voice_close(cvn_voice *v);
 int cvn_voice_sample_rate(const cvn_voice *v); /* 22050 */
 

@@ -1,7 +1,9 @@
 // KERNEL32 / USER32 / ADVAPI32 / OLE32 subset.
 #include "emu_internal.h"
+#ifndef _WIN32
 #include <dirent.h>
 #include <strings.h>
+#endif
 #include <sys/stat.h>
 #include <errno.h>
 #include <ctype.h>
@@ -342,7 +344,7 @@ static void h_CreateDirectoryA(Emu *e, X86 *c) {
     struct stat st;
     if (stat(host, &st) == 0) { emu_set_last_error(e, ERROR_ALREADY_EXISTS); E_RET(0); return; }
     EMU_LOG("[emu] CreateDirectoryA('%s') -> %s\n", name, host);
-    E_RET(mkdir(host, 0755) == 0);
+    E_RET(emu_mkdir(host) == 0);
 #endif
 }
 static int wildmatch(const char *pat, const char *s) {
@@ -675,7 +677,7 @@ static void h_OutputDebugStringA(Emu *e, X86 *c) {
 }
 static void h_GlobalAlloc(Emu *e, X86 *c) {
     uint32_t flags = A(0), n = A(1);
-    if (flags & 2) x86_fault(c, "GlobalAlloc(GMEM_MOVEABLE) not supported");
+    (void)flags; /* allow GMEM_MOVEABLE: GlobalLock returns the block address directly */
     uint32_t p = emu_malloc(e, n ? n : 1);
     if (flags & 0x40) memset(PTR(p, n ? n : 1), 0, n ? n : 1);
     E_RET(p);
@@ -748,6 +750,270 @@ static void h_CoGetMalloc(Emu *e, X86 *c) {
         wr32(c, e->malloc_obj, emu_vtable(e, imalloc_m, 9));
     }
     wr32(c, A(1), e->malloc_obj);
+    E_RET(0);
+}
+
+
+// ------------------------------------------------------------------ ProTALKER 97 / MSVC CRT support
+static void h_GlobalLock(Emu *e, X86 *c) { (void)e; E_RET(A(0)); }
+static void h_GlobalUnlock(Emu *e, X86 *c) { (void)e; E_RET(0); }
+
+static void h_lopen(Emu *e, X86 *c) {
+    const char *name = S(A(0));
+    uint32_t mode = A(1);
+    char host[1100];
+    if ((mode & 3) != 0) { emu_set_last_error(e, ERROR_ACCESS_DENIED); E_RET(0xFFFFFFFFu); return; }
+    if (!emu_host_path(e, name, host, sizeof host, 1)) {
+        if (emu_trace_api) EMU_LOG("[emu] _lopen('%s') -> not found\n", name);
+        emu_set_last_error(e, ERROR_FILE_NOT_FOUND);
+        E_RET(0xFFFFFFFFu);
+        return;
+    }
+    FILE *f = fopen(host, "rb");
+    if (!f) { emu_set_last_error(e, ERROR_FILE_NOT_FOUND); E_RET(0xFFFFFFFFu); return; }
+    uint32_t h = emu_new_handle(e, H_FILE);
+    emu_handle(e, h)->fp = f;
+    E_RET(h);
+}
+static void h_lread(Emu *e, X86 *c) {
+    Handle *p = emu_handle(e, A(0));
+    uint32_t n = A(2);
+    if (!p || p->type != H_FILE) { E_RET(0xFFFFFFFFu); return; }
+    size_t got = n ? fread(PTR(A(1), n), 1, n, p->fp) : 0;
+    E_RET((uint32_t)got);
+}
+static void h_llseek(Emu *e, X86 *c) {
+    Handle *p = emu_handle(e, A(0));
+    int32_t off = (int32_t)A(1);
+    uint32_t orig = A(2);
+    if (!p || p->type != H_FILE) { E_RET(0xFFFFFFFFu); return; }
+    int whence = orig == 1 ? SEEK_CUR : orig == 2 ? SEEK_END : SEEK_SET;
+    if (fseek(p->fp, off, whence) != 0) { E_RET(0xFFFFFFFFu); return; }
+    E_RET((uint32_t)ftell(p->fp));
+}
+static void h_lclose(Emu *e, X86 *c) {
+    Handle *p = emu_handle(e, A(0));
+    if (!p || p->type != H_FILE) { E_RET(0xFFFFFFFFu); return; }
+    emu_close_handle(e, A(0));
+    E_RET(0);
+}
+static void h_SetFilePointer(Emu *e, X86 *c) {
+    Handle *p = emu_handle(e, A(0));
+    int32_t lo = (int32_t)A(1);
+    uint32_t hip = A(2), method = A(3);
+    if (!p || p->type != H_FILE) { emu_set_last_error(e, ERROR_INVALID_HANDLE); E_RET(0xFFFFFFFFu); return; }
+    int whence = method == 1 ? SEEK_CUR : method == 2 ? SEEK_END : SEEK_SET;
+    if (fseek(p->fp, lo, whence) != 0) { E_RET(0xFFFFFFFFu); return; }
+    if (hip) wr32(c, hip, 0);
+    E_RET((uint32_t)ftell(p->fp));
+}
+static void h_SetHandleCount(Emu *e, X86 *c) { (void)e; E_RET(A(0)); }
+static void h_GetStdHandle(Emu *e, X86 *c) { (void)e; (void)c; E_RET(0x10u); }
+static void h_GetFileType(Emu *e, X86 *c) {
+    uint32_t h = A(0);
+    if (h == 0x10u) { E_RET(2); return; }
+    Handle *p = emu_handle(e, h);
+    E_RET(p && p->type == H_FILE ? 1 : 0);
+}
+static void h_GetStartupInfoA(Emu *e, X86 *c) {
+    uint32_t p = A(0);
+    if (p) { memset(PTR(p, 68), 0, 68); wr32(c, p, 68); }
+    E_RET(0);
+}
+static void h_GetCommandLineA(Emu *e, X86 *c) {
+    if (!e->cmdline_a) {
+        const char *s = "SAPI4HOST.EXE";
+        e->cmdline_a = emu_static(e, 16);
+        memcpy(PTR(e->cmdline_a, 14), s, 14);
+    }
+    E_RET(e->cmdline_a);
+}
+static void h_GetEnvironmentStrings(Emu *e, X86 *c) {
+    if (!e->env_a) e->env_a = emu_static(e, 4);
+    E_RET(e->env_a);
+}
+static void h_GetEnvironmentStringsW(Emu *e, X86 *c) {
+    if (!e->env_w) e->env_w = emu_static(e, 8);
+    E_RET(e->env_w);
+}
+static void h_GetVersion(Emu *e, X86 *c) { (void)e; E_RET(0x0A280105u); }
+static void h_GetCurrentProcess(Emu *e, X86 *c) { (void)e; E_RET(0xFFFFFFFFu); }
+static void h_GetCurrentThreadId(Emu *e, X86 *c) { E_RET(e->cur ? (uint32_t)e->cur->id : 1u); }
+static void h_SetLastError(Emu *e, X86 *c) { emu_set_last_error(e, A(0)); E_RET(0); }
+static void h_GetModuleHandleA(Emu *e, X86 *c) {
+    uint32_t nm = A(0);
+    if (!nm) { E_RET(e->nmodules ? e->modules[0].base : 0x00400000u); return; }
+    const char *s = S(nm);
+    for (int i = 0; i < e->nmodules; i++) {
+        if (!strcasecmp(e->modules[i].name, s)) { E_RET(e->modules[i].base); return; }
+    }
+    E_RET(0);
+}
+static void h_HeapCreate(Emu *e, X86 *c) { (void)e; (void)c; E_RET(0x55550000u); }
+static void h_HeapAlloc(Emu *e, X86 *c) {
+    uint32_t flags = A(1), n = A(2) ? A(2) : 1;
+    uint32_t p = emu_malloc(e, n);
+    if (flags & 8) memset(PTR(p, n), 0, n);
+    E_RET(p);
+}
+static void h_HeapReAlloc(Emu *e, X86 *c) {
+    uint32_t flags = A(1), oldp = A(2), n = A(3) ? A(3) : 1;
+    (void)flags;
+    E_RET(oldp ? emu_realloc(e, oldp, n) : emu_malloc(e, n));
+}
+static void h_HeapFree(Emu *e, X86 *c) {
+    if (A(2)) emu_free(e, A(2));
+    E_RET(1);
+}
+static void h_VirtualAlloc(Emu *e, X86 *c) {
+    uint32_t addr = A(0), sz = A(1), type = A(2);
+    if (addr && (type & 0x1000u) && !(type & 0x2000u)) {
+        memset(PTR(addr, sz ? sz : 1), 0, sz ? sz : 1);
+        E_RET(addr);
+        return;
+    }
+    uint32_t n = sz ? sz : 4096;
+    uint32_t p = emu_malloc(e, n + 4096);
+    uint32_t aligned = (p + 4095u) & ~4095u;
+    memset(PTR(aligned, n), 0, n);
+    E_RET(aligned);
+}
+static void h_VirtualFree(Emu *e, X86 *c) { (void)e; (void)c; E_RET(1); }
+
+static void h_TlsAlloc(Emu *e, X86 *c) {
+    for (int i = 0; i < 64; i++) {
+        if (!(e->tls_mask & (1ULL << i))) {
+            e->tls_mask |= (1ULL << i);
+            for (int t = 0; t < e->nthreads; t++) e->threads[t].tls[i] = 0;
+            E_RET((uint32_t)i);
+            return;
+        }
+    }
+    E_RET(0xFFFFFFFFu);
+}
+static void h_TlsGetValue(Emu *e, X86 *c) {
+    uint32_t idx = A(0);
+    emu_set_last_error(e, 0);
+    E_RET((idx < 64 && e->cur) ? e->cur->tls[idx] : 0);
+}
+static void h_TlsSetValue(Emu *e, X86 *c) {
+    uint32_t idx = A(0), val = A(1);
+    if (idx >= 64 || !e->cur) { E_RET(0); return; }
+    e->cur->tls[idx] = val;
+    E_RET(1);
+}
+static void h_TlsFree(Emu *e, X86 *c) {
+    uint32_t idx = A(0);
+    if (idx < 64) e->tls_mask &= ~(1ULL << idx);
+    E_RET(1);
+}
+static void h_GetACP(Emu *e, X86 *c) { (void)e; E_RET(932); }
+static void h_GetCPInfo(Emu *e, X86 *c) {
+    uint32_t cp = A(0), p = A(1);
+    if (!p) { E_RET(0); return; }
+    memset(PTR(p, 20), 0, 20);
+    if (cp == 932 || cp == 0) {
+        wr32(c, p, 2); // MaxCharSize = 2 for Shift-JIS
+        wr8(c, p + 4, '?');
+        wr8(c, p + 6, 0x81); wr8(c, p + 7, 0x9F);
+        wr8(c, p + 8, 0xE0); wr8(c, p + 9, 0xFC);
+    } else {
+        wr32(c, p, 1);
+        wr8(c, p + 4, '?');
+    }
+    E_RET(1);
+}
+static void h_GetSystemTime(Emu *e, X86 *c) {
+    uint32_t p = A(0);
+    if (p) {
+        memset(PTR(p, 16), 0, 16);
+        wr16(c, p + 0, 2026);
+        wr16(c, p + 2, 1);
+        wr16(c, p + 6, 1);
+    }
+    E_RET(0);
+}
+static void h_GetStringTypeA(Emu *e, X86 *c) {
+    uint32_t src = A(2), out = A(4);
+    int32_t n = (int32_t)A(3);
+    const uint8_t *s = (const uint8_t *)(n < 0 ? S(src) : PTR(src, (uint32_t)(n ? n : 1)));
+    if (n < 0) n = (int32_t)strlen((const char *)s) + 1;
+    uint16_t *d = (uint16_t *)(void *)PTR(out, 2u * (uint32_t)(n ? n : 1));
+    for (int i = 0; i < n; i++) d[i] = isspace(s[i]) ? 8 : isdigit(s[i]) ? 4 : isalpha(s[i]) ? 0x100 : 0x10;
+    E_RET(1);
+}
+static void h_GetStringTypeW(Emu *e, X86 *c) {
+    uint32_t src = A(1), out = A(3);
+    int32_t n = (int32_t)A(2);
+    size_t wl;
+    const uint16_t *s = (n < 0) ? emu_wstr(e, src, &wl) : (const uint16_t *)(void *)PTR(src, 2u * (uint32_t)(n ? n : 1));
+    if (n < 0) n = (int32_t)wl + 1;
+    uint16_t *d = (uint16_t *)(void *)PTR(out, 2u * (uint32_t)(n ? n : 1));
+    for (int i = 0; i < n; i++) d[i] = (s[i] <= 0x20) ? 8 : (s[i] >= '0' && s[i] <= '9') ? 4 : 0x100;
+    E_RET(1);
+}
+static void h_LCMapStringA(Emu *e, X86 *c) {
+    uint32_t src = A(2), dst = A(4);
+    int32_t n = (int32_t)A(3), dn = (int32_t)A(5);
+    const char *s = (n < 0) ? S(src) : PTR(src, (uint32_t)(n ? n : 1));
+    if (n < 0) n = (int32_t)strlen(s) + 1;
+    if (dn == 0) { E_RET(n); return; }
+    if (dn < n) { E_RET(0); return; }
+    memcpy(PTR(dst, (uint32_t)n), s, (size_t)n);
+    E_RET(n);
+}
+static void h_LCMapStringW(Emu *e, X86 *c) {
+    uint32_t src = A(2), dst = A(4);
+    int32_t n = (int32_t)A(3), dn = (int32_t)A(5);
+    size_t wl;
+    const uint16_t *s = (n < 0) ? emu_wstr(e, src, &wl) : (const uint16_t *)(void *)PTR(src, 2u * (uint32_t)(n ? n : 1));
+    if (n < 0) n = (int32_t)wl + 1;
+    if (dn == 0) { E_RET(n); return; }
+    if (dn < n) { E_RET(0); return; }
+    memcpy(PTR(dst, 2u * (uint32_t)n), s, 2u * (size_t)n);
+    E_RET(n);
+}
+static void h_TerminateThread(Emu *e, X86 *c) {
+    Handle *p = emu_handle(e, A(0));
+    if (p && p->type == H_THREAD && p->thread) p->thread->state = T_DEAD;
+    E_RET(1);
+}
+static void h_ExitProcess(Emu *e, X86 *c) { e->stop_reason = STOP_EXIT; c->stop = 1; E_RET(0); }
+
+static void h_waveOutGetDevCapsA(Emu *e, X86 *c) {
+    uint32_t p = A(1), cb = A(2);
+    if (p && cb >= 52) {
+        memset(PTR(p, 52), 0, 52);
+        wr32(c, p + 40, 0x000FFFFFu); // dwFormats: all standard PCM formats
+        wr16(c, p + 44, 2);           // wChannels
+        wr32(c, p + 48, 0x0000000Cu); // dwSupport
+    }
+    E_RET(0);
+}
+
+// regtts.dll (IBM ProTALKER 97 registry helper thunks, __cdecl)
+static void h_VFRegGetDataDir(Emu *e, X86 *c) {
+    const char *dir = "C:\\PROTALK\\DICT";
+    size_t n = strlen(dir) + 1;
+    if (A(0) && A(1) >= n) memcpy(PTR(A(0), (uint32_t)n), dir, n);
+    E_RET(0);
+}
+static void h_VFRegGetOutDir(Emu *e, X86 *c) {
+    const char *dir = "C:\\PROTALK\\DICT";
+    size_t n = strlen(dir) + 1;
+    if (A(0) && A(1) >= n) memcpy(PTR(A(0), (uint32_t)n), dir, n);
+    E_RET(0);
+}
+static void h_VFRegGetUnitDir(Emu *e, X86 *c) {
+    int actor = (int32_t)A(2);
+    const char *dir = (actor == 2) ? "C:\\PROTALK\\UNIT\\WFCF1000" : "C:\\PROTALK\\UNIT\\WFCM1000";
+    size_t n = strlen(dir) + 1;
+    if (A(0) && A(1) >= n) memcpy(PTR(A(0), (uint32_t)n), dir, n);
+    E_RET(0);
+}
+static void h_VFRegGetSize(Emu *e, X86 *c) {
+    if (A(0)) wr32(c, A(0), 22); // 22 kHz
+    if (A(1)) wr32(c, A(1), 1);  // compressed unit DB
     E_RET(0);
 }
 
@@ -828,7 +1094,68 @@ static const ApiDef win_apis[] = {
     { "KERNEL32.dll", "CreateThread", h_CreateThread, 24 },
     { "KERNEL32.dll", "OpenFile", h_ret_neg1, 12 },      // only used to save the user lexicon: never
     { "KERNEL32.dll", "_lwrite", h_ret_neg1, 12 },
-    { "KERNEL32.dll", "_lclose", h_ret_neg1, 4 },
+    { "KERNEL32.dll", "_lopen", h_lopen, 8 },
+    { "KERNEL32.dll", "_lread", h_lread, 12 },
+    { "KERNEL32.dll", "_llseek", h_llseek, 12 },
+    { "KERNEL32.dll", "_lclose", h_lclose, 4 },
+    { "KERNEL32.dll", "_lcreat", h_ret_neg1, 8 },
+    { "KERNEL32.dll", "SetFilePointer", h_SetFilePointer, 16 },
+    { "KERNEL32.dll", "FlushFileBuffers", h_ret_true, 4 },
+    { "KERNEL32.dll", "GlobalLock", h_GlobalLock, 4 },
+    { "KERNEL32.dll", "GlobalUnlock", h_GlobalUnlock, 4 },
+    { "KERNEL32.dll", "SetHandleCount", h_SetHandleCount, 4 },
+    { "KERNEL32.dll", "GetStdHandle", h_GetStdHandle, 4 },
+    { "KERNEL32.dll", "SetStdHandle", h_ret_true, 8 },
+    { "KERNEL32.dll", "GetFileType", h_GetFileType, 4 },
+    { "KERNEL32.dll", "GetStartupInfoA", h_GetStartupInfoA, 4 },
+    { "KERNEL32.dll", "GetCommandLineA", h_GetCommandLineA, 0 },
+    { "KERNEL32.dll", "GetEnvironmentStrings", h_GetEnvironmentStrings, 0 },
+    { "KERNEL32.dll", "GetEnvironmentStringsW", h_GetEnvironmentStringsW, 0 },
+    { "KERNEL32.dll", "FreeEnvironmentStringsA", h_ret_true, 4 },
+    { "KERNEL32.dll", "FreeEnvironmentStringsW", h_ret_true, 4 },
+    { "KERNEL32.dll", "GetVersion", h_GetVersion, 0 },
+    { "KERNEL32.dll", "GetCurrentProcess", h_GetCurrentProcess, 0 },
+    { "KERNEL32.dll", "GetCurrentThreadId", h_GetCurrentThreadId, 0 },
+    { "KERNEL32.dll", "SetLastError", h_SetLastError, 4 },
+    { "KERNEL32.dll", "GetModuleHandleA", h_GetModuleHandleA, 4 },
+    { "KERNEL32.dll", "HeapCreate", h_HeapCreate, 12 },
+    { "KERNEL32.dll", "HeapDestroy", h_ret_true, 4 },
+    { "KERNEL32.dll", "HeapAlloc", h_HeapAlloc, 12 },
+    { "KERNEL32.dll", "HeapReAlloc", h_HeapReAlloc, 16 },
+    { "KERNEL32.dll", "HeapFree", h_HeapFree, 12 },
+    { "KERNEL32.dll", "VirtualAlloc", h_VirtualAlloc, 16 },
+    { "KERNEL32.dll", "VirtualFree", h_VirtualFree, 12 },
+    { "KERNEL32.dll", "TlsAlloc", h_TlsAlloc, 0 },
+    { "KERNEL32.dll", "TlsGetValue", h_TlsGetValue, 4 },
+    { "KERNEL32.dll", "TlsSetValue", h_TlsSetValue, 8 },
+    { "KERNEL32.dll", "TlsFree", h_TlsFree, 4 },
+    { "KERNEL32.dll", "GetACP", h_GetACP, 0 },
+    { "KERNEL32.dll", "GetOEMCP", h_GetACP, 0 },
+    { "KERNEL32.dll", "GetCPInfo", h_GetCPInfo, 8 },
+    { "KERNEL32.dll", "GetSystemTime", h_GetSystemTime, 4 },
+    { "KERNEL32.dll", "GetStringTypeA", h_GetStringTypeA, 20 },
+    { "KERNEL32.dll", "GetStringTypeW", h_GetStringTypeW, 16 },
+    { "KERNEL32.dll", "LCMapStringA", h_LCMapStringA, 24 },
+    { "KERNEL32.dll", "LCMapStringW", h_LCMapStringW, 24 },
+    { "KERNEL32.dll", "TerminateThread", h_TerminateThread, 8 },
+    { "KERNEL32.dll", "ExitProcess", h_ExitProcess, 4 },
+    { "KERNEL32.dll", "TerminateProcess", h_ExitProcess, 8 },
+    { "KERNEL32.dll", "RtlUnwind", h_ret_zero, 16 },
+    { "WINMM.dll", "waveOutGetNumDevs", h_ret_true, 0 },
+    { "WINMM.dll", "waveOutGetDevCapsA", h_waveOutGetDevCapsA, 12 },
+    { "WINMM.dll", "waveOutOpen", h_ret_zero, 24 },
+    { "WINMM.dll", "waveOutClose", h_ret_zero, 4 },
+    { "WINMM.dll", "waveOutPrepareHeader", h_ret_zero, 12 },
+    { "WINMM.dll", "waveOutUnprepareHeader", h_ret_zero, 12 },
+    { "WINMM.dll", "waveOutWrite", h_ret_zero, 12 },
+    { "WINMM.dll", "waveOutPause", h_ret_zero, 4 },
+    { "WINMM.dll", "waveOutRestart", h_ret_zero, 4 },
+    { "WINMM.dll", "waveOutReset", h_ret_zero, 4 },
+    { "WINMM.dll", "waveOutGetID", h_ret_zero, 8 },
+    { "regtts.dll", "VFRegGetDataDir", h_VFRegGetDataDir, 0 },
+    { "regtts.dll", "VFRegGetOutDir", h_VFRegGetOutDir, 0 },
+    { "regtts.dll", "VFRegGetUnitDir", h_VFRegGetUnitDir, 0 },
+    { "regtts.dll", "VFRegGetSize", h_VFRegGetSize, 0 },
     { "USER32.dll", "GetMessageA", h_GetMessageA, 16 },
     { "USER32.dll", "PeekMessageA", h_PeekMessageA, -1 },
     { "USER32.dll", "TranslateMessage", h_TranslateMessage, 4 },

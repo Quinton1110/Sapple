@@ -83,6 +83,37 @@ enum {
     ZB_F_SylToBIAccent,                    /* Phone.Syllable.ToBIAccent (Eva) */
     ZB_F_PrevSylToBIAccent,                /* Phone.Syllable.PrevSyllable.ToBIAccent (Eva) */
     ZB_F_NextSylToBIAccent,                /* Phone.Syllable.NextSyllable.ToBIAccent (Eva) */
+    ZB_F_SylAccent,                        /* Phone.Syllable.Accent */
+    ZB_F_SylAccentedSyllNumAfterCurrSyll,  /* Phone.Syllable.AccentedSyllNumAfterCurrSyll */
+    ZB_F_SylAccentedSyllNumBeforeCurrSyll, /* Phone.Syllable.AccentedSyllNumBeforeCurrSyll */
+    ZB_F_SylBwPosInProsodicWord,           /* Phone.Syllable.BwPosInProsodicWord */
+    ZB_F_SylBwPosInSentence,               /* Phone.Syllable.BwPosInSentence */
+    ZB_F_SylChineseToneIndex,              /* Phone.Syllable.ChineseToneIndex */
+    ZB_F_SylFwPosInProsodicWord,           /* Phone.Syllable.FwPosInProsodicWord */
+    ZB_F_SylFwPosInSentence,               /* Phone.Syllable.FwPosInSentence */
+    ZB_F_NextSylChineseToneIndex,          /* Phone.Syllable.NextSyllable.ChineseToneIndex */
+    ZB_F_NextSylTone,                      /* Phone.Syllable.NextSyllable.Tone */
+    ZB_F_PrevSylChineseToneIndex,          /* Phone.Syllable.PrevSyllable.ChineseToneIndex */
+    ZB_F_PrevSylTone,                      /* Phone.Syllable.PrevSyllable.Tone */
+    ZB_F_SylNumFromLeftAccent,             /* Phone.Syllable.SyllNumFromLeftAccent */
+    ZB_F_SylNumToRightAccent,              /* Phone.Syllable.SyllNumToRightAccent */
+    ZB_F_SylTone,                          /* Phone.Syllable.Tone */
+    ZB_F_NextWordPOSTaggerPOS,             /* Phone.Syllable.Word.NextWord.POSTaggerPOS */
+    ZB_F_WordPOSTaggerPOS,                 /* Phone.Syllable.Word.POSTaggerPOS */
+    ZB_F_PhraseItmPhraseNumOfItnPhrase,    /* Phone.Syllable.Word.Phrase.ItmPhraseNumOfItnPhrase */
+    ZB_F_NextPhrasePrimaryAccentPosition,  /* Phone.Syllable.Word.Phrase.NextPhrase.PrimaryAccentPosition */
+    ZB_F_PrevPhrasePrimaryAccentPosition,  /* Phone.Syllable.Word.Phrase.PrevPhrase.PrimaryAccentPosition */
+    ZB_F_PhrasePrimaryAccentPosition,      /* Phone.Syllable.Word.Phrase.PrimaryAccentPosition */
+    ZB_F_PhraseSyllNumOfItnPhrase,         /* Phone.Syllable.Word.Phrase.SyllNumOfItnPhrase */
+    ZB_F_PhraseWordNumOfItnPhrase,         /* Phone.Syllable.Word.Phrase.WordNumOfItnPhrase */
+    ZB_F_PrevWordPOSTaggerPOS,             /* Phone.Syllable.Word.PrevWord.POSTaggerPOS */
+    ZB_F_ProsodicWordBwPosInPhrase,        /* Phone.Syllable.Word.ProsodicWord.BwPosInPhrase */
+    ZB_F_ProsodicWordBwPosInSentence,      /* Phone.Syllable.Word.ProsodicWord.BwPosInSentence */
+    ZB_F_ProsodicWordFwPosInPhrase,        /* Phone.Syllable.Word.ProsodicWord.FwPosInPhrase */
+    ZB_F_ProsodicWordFwPosInSentence,      /* Phone.Syllable.Word.ProsodicWord.FwPosInSentence */
+    ZB_F_ProsodicWordSyllableNumber,       /* Phone.Syllable.Word.ProsodicWord.SyllableNumber */
+    ZB_F_ProsodicWordWordNumber,           /* Phone.Syllable.Word.ProsodicWord.WordNumber */
+    ZB_F_PhoneToneLevel,                   /* Phone.ToneLevel */
     ZB_NFEAT
 };
 extern const char *const zb_feature_path[ZB_NFEAT];   /* full dotted APM path per column */

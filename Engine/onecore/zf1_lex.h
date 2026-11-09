@@ -58,9 +58,9 @@ const char *zf1_lex_attrname(const zf1_lex *lx, int id);
 /* ---- phone set ---- */
 typedef struct zf1_phoneset {
     int n;
-    uint16_t id[64];
-    char name[64][24];
-    uint32_t flags[64];
+    uint16_t id[128];
+    char name[128][24];
+    uint32_t flags[128];
     int byid[128];                      /* id -> index or -1 */
 } zf1_phoneset;
 int zf1_phoneset_init(zf1_phoneset *ps, const uint8_t *res, size_t size);

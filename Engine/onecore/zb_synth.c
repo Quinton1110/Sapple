@@ -237,8 +237,9 @@ int zb_synth(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn write, 
     short *pcm = NULL, *wav = NULL;
     int *stretch = NULL;
     long nwav = 0;
-    const int D = 24;
+    int D;
     if (!v->m_lsf || !v->m_lf0) return -1;   /* duration-only APM (Eva) */
+    D = v->m_lsf->streamdim[0] / 3 - 1;
     if (v->isint) return zb_synth_int(v, u, sapi, write, user, trace);
     memset(&um, 0, sizeof um);
     if (lookup(v, u, &um)) goto done;
@@ -293,7 +294,7 @@ int zb_synth(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn write, 
     }
     /* vocoder */
     pcm = (short *)calloc((size_t)T * v->shift + 1, sizeof(short));
-    zb_vocoder_float(v, u, um.dur, ns, T, lf0, lsf, gain, stretch, pcm);
+    zb_vocoder_float_p(v, u, um.dur, ns, T, lf0, lsf, gain, stretch, pcm, D);
     nwav = zb_wave_sps(v, u, sapi, um.dur, ns, stretch, NULL, 0, pcm, &wav);   /* rate stage, voice + SAPI volume */
     zb_srand(v, 0x406);   /* end-of-utterance vocoder reset (FUN_18011024c) */
     rc = 0;

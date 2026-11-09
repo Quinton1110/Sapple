@@ -33,7 +33,11 @@ enum {
     P_BwPosInWord = 0x0a, P_FwPosInPhrase = 0x0d, P_BwPosInPhrase = 0x0e, P_FwPosInSentence = 0x11,
     P_BwPosInSentence = 0x12, P_Stress = 0x15, P_Accent = 0x16, P_POS = 0x17, P_POSTaggerPOS = 0x18,
     P_ToBIFinalBoundaryTone = 0x19, P_BreakIndex = 0x2a, P_SentenceType = 0x2e, P_FwPosInYesNoQuestion = 0x2f,
-    P_BwPosInYesNoQuestion = 0x30, P_Emphasis = 0x4c, P_ToBIAccent = 0x4f, P_SentenceEmotion = 0x54, P_Tone = 0x29
+    P_BwPosInYesNoQuestion = 0x30, P_Emphasis = 0x4c, P_ToBIAccent = 0x4f, P_SentenceEmotion = 0x54, P_Tone = 0x29,
+    P_FwPosInProsodicWord = 0x60, P_BwPosInProsodicWord = 0x61, P_ChineseToneIndex = 0x62, P_ToneLevel = 0x63,
+    P_AccentedSyllNumBeforeCurrSyll = 0x64, P_AccentedSyllNumAfterCurrSyll = 0x65,
+    P_SyllNumFromLeftAccent = 0x66, P_SyllNumToRightAccent = 0x67, P_PrimaryAccentPosition = 0x68,
+    P_ItmPhraseNumOfItnPhrase = 0x69, P_SyllNumOfItnPhrase = 0x6a, P_WordNumOfItnPhrase = 0x6b
 };
 static const struct { const char *name; int id; } PROP[] = {
     {"PhoneIdentity", P_PhoneIdentity}, {"PhoneNumber", P_PhoneNumber}, {"SyllableNumber", P_SyllableNumber},
@@ -45,7 +49,15 @@ static const struct { const char *name; int id; } PROP[] = {
     {"POSTaggerPOS", P_POSTaggerPOS}, {"ToBIFinalBoundaryTone", P_ToBIFinalBoundaryTone},
     {"BreakIndex", P_BreakIndex}, {"SentenceType", P_SentenceType}, {"FwPosInYesNoQuestion", P_FwPosInYesNoQuestion},
     {"BwPosInYesNoQuestion", P_BwPosInYesNoQuestion}, {"Emphasis", P_Emphasis}, {"ToBIAccent", P_ToBIAccent},
-    {"SentenceEmotion", P_SentenceEmotion}, {"Tone", P_Tone}};
+    {"SentenceEmotion", P_SentenceEmotion}, {"Tone", P_Tone},
+    {"FwPosInProsodicWord", P_FwPosInProsodicWord}, {"BwPosInProsodicWord", P_BwPosInProsodicWord},
+    {"ChineseToneIndex", P_ChineseToneIndex}, {"ToneLevel", P_ToneLevel},
+    {"AccentedSyllNumBeforeCurrSyll", P_AccentedSyllNumBeforeCurrSyll},
+    {"AccentedSyllNumAfterCurrSyll", P_AccentedSyllNumAfterCurrSyll},
+    {"SyllNumFromLeftAccent", P_SyllNumFromLeftAccent}, {"SyllNumToRightAccent", P_SyllNumToRightAccent},
+    {"PrimaryAccentPosition", P_PrimaryAccentPosition},
+    {"ItmPhraseNumOfItnPhrase", P_ItmPhraseNumOfItnPhrase},
+    {"SyllNumOfItnPhrase", P_SyllNumOfItnPhrase}, {"WordNumOfItnPhrase", P_WordNumOfItnPhrase}};
 
 typedef struct { int level, i; } Node; /* i = -1: none */
 
@@ -179,6 +191,42 @@ static int rw_between(const Z2Sent *s, int a, int b)
     return n;
 }
 
+static int phone_tone_level(const Z2Sent *s, int id)
+{
+    uint32_t fl = (id > 0 && id < Z2_PS_MAX) ? s->v->ps.flags[id] : 0;
+    if (fl & 0x40000u) return 1;
+    if (fl & 0x80000u) return 2;
+    if (fl & 0x100000u) return 3;
+    return 4;
+}
+static int syl_chinese_tone(const Z2Sent *s, int si)
+{
+    const Z2S *y = &s->s[si];
+    int k, first = 0, last = 0;
+    for (k = 0; k < y->np; k++) {
+        int tl = phone_tone_level(s, s->p[y->p0 + k].id);
+        if (tl <= 3) {
+            if (!first) first = tl;
+            last = tl;
+        }
+    }
+    if (!first) return 5;
+    if (first == 1 && last == 1) return 1;
+    if (first != 1 && last == 1) return 2;
+    if (first == 3) return 3;
+    if (last == 3) return 4;
+    return 5;
+}
+static int syl_tone(const Z2Sent *s, int si)
+{
+    const Z2S *y = &s->s[si];
+    int k;
+    for (k = 0; k < y->np; k++) {
+        int t = s->p[y->p0 + k].tone;
+        if (t > 0 && s->v->ps.t1 > 0 && t >= s->v->ps.t1) return t - s->v->ps.t1 + 1;
+    }
+    return 0;
+}
 static int get_phone(const Z2Sent *s, int i, int prop, zf2_value *v)
 {
     const Z2P *p = &s->p[i];
@@ -186,6 +234,7 @@ static int get_phone(const Z2Sent *s, int i, int prop, zf2_value *v)
     int wi = y->word;
     switch (prop) {
     case P_PhoneIdentity: return INT(v, p->id);
+    case P_ToneLevel: if (z2_phone_is_sil(s, p->id)) return NUL(v); return INT(v, phone_tone_level(s, p->id));
     case P_FwPosInSyllable: if (z2_phone_is_sil(s, p->id)) return NUL(v); return INT(v, i - y->p0 + 1);
     case P_BwPosInSyllable: if (z2_phone_is_sil(s, p->id)) return NUL(v); return INT(v, y->p0 + y->np - i);
     case P_FwPosInWord: {
@@ -208,13 +257,66 @@ static int get_syl(const Z2Sent *s, int i, int prop, zf2_value *v)
     if (z2_syl_is_sil(s, i)) {
         switch (prop) {
         case P_Stress: case P_Accent: case P_BreakIndex: case P_PhoneNumber: case P_FwPosInWord: case P_BwPosInWord:
-        case P_FwPosInPhrase: case P_BwPosInPhrase: case P_ToBIAccent: return NUL(v);
+        case P_FwPosInPhrase: case P_BwPosInPhrase: case P_ToBIAccent:
+        case P_FwPosInProsodicWord: case P_BwPosInProsodicWord: case P_FwPosInSentence: case P_BwPosInSentence:
+        case P_Tone: case P_ChineseToneIndex: case P_AccentedSyllNumBeforeCurrSyll: case P_AccentedSyllNumAfterCurrSyll:
+        case P_SyllNumFromLeftAccent: case P_SyllNumToRightAccent: return NUL(v);
         }
         return -1;
     }
     switch (prop) {
     case P_Stress: return ENU(v, syl_stress(s, i));
-    case P_Accent: return ENU(v, syl_stress(s, i) != 0 && w->emph == 1 ? 1 : 0);
+    case P_Accent: return ENU(v, syl_stress(s, i) != 0 ? 1 : 0);
+    case P_Tone: return INT(v, syl_tone(s, i));
+    case P_ChineseToneIndex: return INT(v, syl_chinese_tone(s, i));
+    case P_FwPosInSentence: {
+        int k, n = 0;
+        for (k = 0; k <= i; k++) if (!z2_syl_is_sil(s, k)) n++;
+        return INT(v, n);
+    }
+    case P_BwPosInSentence: {
+        int k, n = 0;
+        for (k = i; k < s->ns; k++) if (!z2_syl_is_sil(s, k)) n++;
+        return INT(v, n);
+    }
+    case P_FwPosInProsodicWord: case P_BwPosInProsodicWord: {
+        const Z2PW *pw;
+        int k, a = -1, b = -1;
+        if (w->pw < 0) return NUL(v);
+        pw = &s->pw[w->pw];
+        if (prop == P_FwPosInProsodicWord) {
+            for (k = pw->w0; k <= pw->w1; k++) if (z2_has_syl_pron(&s->w[k])) { a = s->w[k].s0; break; }
+            if (a < 0 || a > i) return NUL(v);
+            return INT(v, i - a + 1);
+        }
+        for (k = pw->w1; k >= pw->w0; k--) if (z2_has_syl_pron(&s->w[k])) { b = word_last_syl(s, k); break; }
+        if (b < 0 || b < i) return NUL(v);
+        return INT(v, b - i + 1);
+    }
+    case P_AccentedSyllNumBeforeCurrSyll: case P_AccentedSyllNumAfterCurrSyll:
+    case P_SyllNumFromLeftAccent: case P_SyllNumToRightAccent: {
+        const Z2PH *ph;
+        int k, a = -1, b = -1, cnt = 0;
+        if (w->phrase < 0) return NUL(v);
+        ph = &s->ph[w->phrase];
+        for (k = ph->w0; k <= ph->w1; k++) if (z2_has_syl_pron(&s->w[k])) { a = s->w[k].s0; break; }
+        for (k = ph->w1; k >= ph->w0; k--) if (z2_has_syl_pron(&s->w[k])) { b = word_last_syl(s, k); break; }
+        if (a < 0 || b < 0) return NUL(v);
+        if (prop == P_AccentedSyllNumBeforeCurrSyll) {
+            for (k = a; k < i; k++) if (!z2_syl_is_sil(s, k) && syl_stress(s, k) == 1) cnt++;
+            return INT(v, cnt);
+        }
+        if (prop == P_AccentedSyllNumAfterCurrSyll) {
+            for (k = i + 1; k <= b; k++) if (!z2_syl_is_sil(s, k) && syl_stress(s, k) == 1) cnt++;
+            return INT(v, cnt);
+        }
+        if (prop == P_SyllNumFromLeftAccent) {
+            for (k = i; k >= a; k--) if (!z2_syl_is_sil(s, k) && syl_stress(s, k) == 1) return INT(v, i - k + 1);
+            return NUL(v);
+        }
+        for (k = i; k <= b; k++) if (!z2_syl_is_sil(s, k) && syl_stress(s, k) == 1) return INT(v, k - i + 1);
+        return NUL(v);
+    }
     case P_BreakIndex: return INT(v, i == word_last_syl(s, y->word) ? w->bi : 1);
     case P_PhoneNumber: return INT(v, y->np);
     case P_FwPosInWord: return INT(v, i - w->s0 + 1);
@@ -292,7 +394,8 @@ static int get_phrase(const Z2Sent *s, int i, int prop, zf2_value *v)
     if (z2_phrase_is_break(s, i)) {
         switch (prop) {
         case P_SyllableNumber: case P_WordNumber: case P_FwPosInSentence: case P_BwPosInSentence:
-        case P_ToBIFinalBoundaryTone: return NUL(v);
+        case P_ToBIFinalBoundaryTone: case P_PrimaryAccentPosition:
+        case P_ItmPhraseNumOfItnPhrase: case P_SyllNumOfItnPhrase: case P_WordNumOfItnPhrase: return NUL(v);
         }
         return -1;
     }
@@ -306,6 +409,65 @@ static int get_phrase(const Z2Sent *s, int i, int prop, zf2_value *v)
         if (s->last_ip < 0) return -1;
         return INT(v, nonbreak_phrases_between(s, i, s->ip[s->last_ip].ph1));
     case P_ToBIFinalBoundaryTone: return ENU(v, z2_is_rw(&s->w[p->w1]) ? s->w[p->w1].tone : 0);
+    case P_PrimaryAccentPosition: {
+        int w, k, pos = 0;
+        for (w = p->w0; w <= p->w1; w++) {
+            if (!z2_has_syl_pron(&s->w[w])) continue;
+            for (k = 0; k < s->w[w].ns; k++) {
+                pos++;
+                if (syl_stress(s, s->w[w].s0 + k) == 1) return INT(v, pos);
+            }
+        }
+        return INT(v, 0);
+    }
+    case P_ItmPhraseNumOfItnPhrase:
+        if (p->ip < 0) return NUL(v);
+        return INT(v, nonbreak_phrases_between(s, s->ip[p->ip].ph0, s->ip[p->ip].ph1));
+    case P_SyllNumOfItnPhrase: {
+        int k, n = 0;
+        if (p->ip < 0) return NUL(v);
+        for (k = s->ip[p->ip].ph0; k <= s->ip[p->ip].ph1; k++) n += phrase_syls(s, k);
+        return INT(v, n);
+    }
+    case P_WordNumOfItnPhrase:
+        if (p->ip < 0) return NUL(v);
+        return INT(v, rw_between(s, s->ph[s->ip[p->ip].ph0].w0, s->ph[s->ip[p->ip].ph1].w1));
+    }
+    return -1;
+}
+static int get_pw(const Z2Sent *s, int i, int prop, zf2_value *v)
+{
+    const Z2PW *p = &s->pw[i];
+    if (node_skip(s, L_PW, i)) return NUL(v);
+    switch (prop) {
+    case P_SyllableNumber: {
+        int k, n = 0;
+        for (k = p->w0; k <= p->w1; k++) if (z2_is_rw(&s->w[k])) n += s->w[k].ns;
+        return INT(v, n);
+    }
+    case P_WordNumber: return INT(v, rw_between(s, p->w0, p->w1));
+    case P_FwPosInPhrase: {
+        int k, n = 0;
+        if (p->ph < 0) return NUL(v);
+        for (k = s->ph[p->ph].pw0; k <= i; k++) if (!node_skip(s, L_PW, k)) n++;
+        return INT(v, n);
+    }
+    case P_BwPosInPhrase: {
+        int k, n = 0;
+        if (p->ph < 0) return NUL(v);
+        for (k = i; k <= s->ph[p->ph].pw1; k++) if (!node_skip(s, L_PW, k)) n++;
+        return INT(v, n);
+    }
+    case P_FwPosInSentence: {
+        int k, n = 0;
+        for (k = 0; k <= i; k++) if (!node_skip(s, L_PW, k)) n++;
+        return INT(v, n);
+    }
+    case P_BwPosInSentence: {
+        int k, n = 0;
+        for (k = i; k < s->npw; k++) if (!node_skip(s, L_PW, k)) n++;
+        return INT(v, n);
+    }
     }
     return -1;
 }
@@ -333,6 +495,7 @@ static int get_value(const Z2Sent *s, Node x, int prop, zf2_value *v)
     case L_PHONE: return get_phone(s, x.i, prop, v);
     case L_SYL: return get_syl(s, x.i, prop, v);
     case L_WORD: return get_word(s, x.i, prop, v);
+    case L_PW: return get_pw(s, x.i, prop, v);
     case L_PHRASE: return get_phrase(s, x.i, prop, v);
     case L_SENT: return get_sent(s, prop, v);
     }

@@ -291,6 +291,82 @@ char *cv_sanitize_alloc(const char *utf8)
     return out.b;
 }
 
+
+static void map_cp_unicode(sbuf *s, unsigned cp)
+{
+    if (cp < 0x20 || cp == 0x7F) {
+        if (cp == '\t' || cp == '\n' || cp == '\r' || cp == '\v' || cp == '\f') sb_putc(s, ' ');
+        return;
+    }
+    switch (cp) {
+    case 0x00AD: case 0x034F: case 0x061C: case 0x180E: case 0x200B: case 0x200C: case 0x200D: case 0x200E:
+    case 0x200F: case 0x202A: case 0x202B: case 0x202C: case 0x202D: case 0x202E: case 0x2060: case 0x2061:
+    case 0x2062: case 0x2063: case 0x2064: case 0x2066: case 0x2067: case 0x2068: case 0x2069: case 0xFEFF:
+        return;
+    default:
+        break;
+    }
+    if (cp >= 0xFE00 && cp <= 0xFE0F) return;
+    if (cp >= 0xE0000 && cp <= 0xE007F) return;
+    if (cp >= 0x1F3FB && cp <= 0x1F3FF) return;
+    if (cp > 0xFFFF) {
+        sb_putc(s, ' ');
+        return;
+    }
+    sb_utf8(s, cp);
+}
+
+char *cv_sanitize_unicode_alloc(const char *utf8)
+{
+    sbuf raw = {0}, out = {0};
+    const unsigned char *p = (const unsigned char *)utf8;
+    size_t len, i = 0, k, letters = 0;
+    int space = 1;
+    if (!utf8) return NULL;
+    len = strlen(utf8);
+    sb_putc(&raw, ' ');
+    while (i < len) {
+        size_t adv;
+        unsigned cp = next_cp(p + i, len - i, &adv);
+        if (cp) map_cp_unicode(&raw, cp);
+        i += adv;
+    }
+    if (raw.oom) {
+        free(raw.b);
+        return NULL;
+    }
+    sb_putc(&out, 0);
+    out.n = 0;
+    for (k = 0; k < raw.n; k++) {
+        char ch = raw.b[k];
+        int is_letter = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
+        if (ch == ' ') {
+            if (!space) sb_putc(&out, ' ');
+            space = 1;
+            letters = 0;
+            continue;
+        }
+        if (is_letter) {
+            if (letters == 40) {
+                sb_putc(&out, ' ');
+                letters = 0;
+            }
+            letters++;
+        } else {
+            letters = 0;
+        }
+        sb_putc(&out, ch);
+        space = 0;
+    }
+    free(raw.b);
+    if (out.oom) {
+        free(out.b);
+        return NULL;
+    }
+    while (out.n > 0 && out.b[out.n - 1] == ' ') out.b[--out.n] = 0;
+    return out.b;
+}
+
 void cv_free(void *p) { free(p); }
 
 /* ================================================================== voice */

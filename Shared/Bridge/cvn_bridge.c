@@ -60,13 +60,29 @@ typedef struct {
 } nv_def;
 
 static const nv_def VOICES[] = {
-    {"Jenny", "en-US", "1033.INI", "Microsoft Jenny (Natural) - English (United States)"},
-    {"Aria", "en-US", "1033.INI", "Microsoft Aria (Natural) - English (United States)"},
-    {"Guy", "en-US", "1033.INI", "Microsoft Guy (Natural) - English (United States)"},
-    {"Sonia", "en-GB", "2057.INI", "Microsoft Sonia (Natural) - English (United Kingdom)"},
-    {"Ryan", "en-GB", "2057.INI", "Microsoft Ryan (Natural) - English (United Kingdom)"},
-    {"Neerja", "en-IN", "1081.INI", "Microsoft Neerja (Natural) - English (India)"},
-    {"Prabhat", "en-IN", "1081.INI", "Microsoft Prabhat (Natural) - English (India)"},
+    {"Jenny",     "en-US", "1033.INI", "Microsoft Jenny (Natural) - English (United States)"},
+    {"Aria",      "en-US", "1033.INI", "Microsoft Aria (Natural) - English (United States)"},
+    {"Guy",       "en-US", "1033.INI", "Microsoft Guy (Natural) - English (United States)"},
+    {"Sonia",     "en-GB", "2057.INI", "Microsoft Sonia (Natural) - English (United Kingdom)"},
+    {"Ryan",      "en-GB", "2057.INI", "Microsoft Ryan (Natural) - English (United Kingdom)"},
+    {"Neerja",    "en-IN", "1081.INI", "Microsoft Neerja (Natural) - English (India)"},
+    {"Prabhat",   "en-IN", "1081.INI", "Microsoft Prabhat (Natural) - English (India)"},
+    {"Nanami",    "ja-JP", "1041.INI", "Microsoft Nanami (Natural) - Japanese (Japan)"},
+    {"Keita",     "ja-JP", "1041.INI", "Microsoft Keita (Natural) - Japanese (Japan)"},
+    {"Xiaoxiao",  "zh-CN", "2052.INI", "Microsoft Xiaoxiao (Natural) - Chinese (Simplified, China)"},
+    {"Yunxi",     "zh-CN", "2052.INI", "Microsoft Yunxi (Natural) - Chinese (Simplified, China)"},
+    {"Katja",     "de-DE", "1031.INI", "Microsoft Katja (Natural) - German (Germany)"},
+    {"Conrad",    "de-DE", "1031.INI", "Microsoft Conrad (Natural) - German (Germany)"},
+    {"Elvira",    "es-ES", "3082.INI", "Microsoft Elvira (Natural) - Spanish (Spain)"},
+    {"Alvaro",    "es-ES", "3082.INI", "Microsoft Alvaro (Natural) - Spanish (Spain)"},
+    {"Dalia",     "es-MX", "2058.INI", "Microsoft Dalia (Natural) - Spanish (Mexico)"},
+    {"Jorge",     "es-MX", "2058.INI", "Microsoft Jorge (Natural) - Spanish (Mexico)"},
+    {"Denise",    "fr-FR", "1036.INI", "Microsoft Denise (Natural) - French (France)"},
+    {"Henri",     "fr-FR", "1036.INI", "Microsoft Henri (Natural) - French (France)"},
+    {"SunHi",     "ko-KR", "1042.INI", "Microsoft SunHi (Natural) - Korean (Korea)"},
+    {"InJoon",    "ko-KR", "1042.INI", "Microsoft InJoon (Natural) - Korean (Korea)"},
+    {"Francisca", "pt-BR", "1046.INI", "Microsoft Francisca (Natural) - Portuguese (Brazil)"},
+    {"Antonio",   "pt-BR", "1046.INI", "Microsoft Antonio (Natural) - Portuguese (Brazil)"},
 };
 #define NVOICES ((int)(sizeof VOICES / sizeof VOICES[0]))
 
@@ -120,6 +136,7 @@ static int voice_index(const char *name)
 {
     int i;
     if (!name) return -1;
+    if (!strcmp(name, "KatjaNatural") || !strcmp(name, "Katja (Natural)")) name = "Katja";
     for (i = 0; i < NVOICES; i++)
         if (!strcmp(VOICES[i].name, name)) return i;
     return -1;
@@ -219,12 +236,31 @@ static int link_folder(const char *dir, const char *src_dir, const char *skip)
     return n;
 }
 
+static char g_extra_nv_dir[PATH_MAX] = "";
+static char g_extra_oc_dir[PATH_MAX] = "";
+
+void cvn_set_extra_dir(const char *extra_nv_dir)
+{
+    snprintf(g_extra_nv_dir, sizeof g_extra_nv_dir, "%s", extra_nv_dir ? extra_nv_dir : "");
+}
+
+void cvn_set_extra_oc_dir(const char *extra_oc_dir)
+{
+    snprintf(g_extra_oc_dir, sizeof g_extra_oc_dir, "%s", extra_oc_dir ? extra_oc_dir : "");
+}
+
 static int links(const char *dir, const char *src_dir, const nv_link *l)
 {
     char target[PATH_MAX];
     for (; l->link; l++) {
         snprintf(target, sizeof target, "%s/%s", src_dir, l->target);
-        if (link_to(dir, l->link, target)) return -1;
+        if (link_to(dir, l->link, target) != 0) {
+            if (g_extra_oc_dir[0]) {
+                snprintf(target, sizeof target, "%s/%s", g_extra_oc_dir, l->target);
+                if (link_to(dir, l->link, target) == 0) continue;
+            }
+            return -1;
+        }
     }
     return 0;
 }
@@ -256,6 +292,10 @@ static int prepare(int i, const char *data_dir, const char *onecore_dir, const c
     if (!G.key[0]) {
         snprintf(path, sizeof path, "%s/model.key", data_dir);
         key = read_file(path, sizeof G.key - 1);
+        if (!key && g_extra_nv_dir[0]) {
+            snprintf(path, sizeof path, "%s/model.key", g_extra_nv_dir);
+            key = read_file(path, sizeof G.key - 1);
+        }
         if (!key) {
             seterr(err, errlen, "no model key in %s", data_dir);
             return -1;
@@ -270,6 +310,10 @@ static int prepare(int i, const char *data_dir, const char *onecore_dir, const c
     }
     snprintf(src, sizeof src, "%s/%s", data_dir, v->name);
     snprintf(path, sizeof path, "%s/%s", src, v->ini);
+    if (access(path, R_OK) && g_extra_nv_dir[0]) {
+        snprintf(src, sizeof src, "%s/%s", g_extra_nv_dir, v->name);
+        snprintf(path, sizeof path, "%s/%s", src, v->ini);
+    }
     if (access(path, R_OK)) {
         seterr(err, errlen, "no voice data for %s", v->name);
         return -1;
@@ -281,26 +325,50 @@ static int prepare(int i, const char *data_dir, const char *onecore_dir, const c
         return -1;
     }
     remove_folder_entries(G.work[i]); /* links from an earlier install point into a bundle that may have moved */
-    if (link_folder(G.work[i], src, NULL) < 6) {
-        seterr(err, errlen, "incomplete voice data for %s", v->name);
-        return -1;
-    }
     if (!strcmp(v->locale, "en-US")) {
-        if (links(G.work[i], onecore_dir, ONECORE_EN_US)) {
+        if (link_folder(G.work[i], src, NULL) < 5 || links(G.work[i], onecore_dir, ONECORE_EN_US)) {
             seterr(err, errlen, "missing OneCoreVoice language data for %s", v->name);
             return -1;
         }
     } else if (!strcmp(v->locale, "en-GB")) {
+        int gb_links = 0;
         snprintf(path, sizeof path, "%s/en-GB", data_dir);
-        if (link_folder(G.work[i], path, NULL) < 2 || links(G.work[i], onecore_dir, ONECORE_EN_GB)) {
+        gb_links = link_folder(G.work[i], path, NULL);
+        if (gb_links < 2 && g_extra_nv_dir[0]) {
+            snprintf(path, sizeof path, "%s/en-GB", g_extra_nv_dir);
+            gb_links = link_folder(G.work[i], path, NULL);
+        }
+        if (link_folder(G.work[i], src, NULL) < 5 || gb_links < 2 ||
+            links(G.work[i], onecore_dir, ONECORE_EN_GB)) {
             seterr(err, errlen, "missing en-GB language data for %s", v->name);
             return -1;
         }
-    } else { /* en-IN: MSTTSLocEnIN.dat and its four domain files, all in NeuralVoices/en-IN (OneCoreVoice has none) */
-        snprintf(path, sizeof path, "%s/en-IN", data_dir);
-        if (link_folder(G.work[i], path, NULL) < 5) {
-            seterr(err, errlen, "missing en-IN language data for %s", v->name);
+    } else {
+        snprintf(path, sizeof path, "%s/%s", data_dir, v->locale);
+        link_folder(G.work[i], path, NULL);
+        if (g_extra_nv_dir[0]) {
+            snprintf(path, sizeof path, "%s/%s", g_extra_nv_dir, v->locale);
+            link_folder(G.work[i], path, NULL);
+        }
+        if (link_folder(G.work[i], src, NULL) < 5) {
+            seterr(err, errlen, "incomplete voice data for %s", v->name);
             return -1;
+        }
+        snprintf(path, sizeof path, "%s/MSTTSLocEnUS.dat", onecore_dir);
+        if (link_to(G.work[i], "MSTTSLocEnUS.dat", path) != 0 && g_extra_oc_dir[0]) {
+            snprintf(path, sizeof path, "%s/MSTTSLocEnUS.dat", g_extra_oc_dir);
+            link_to(G.work[i], "MSTTSLocEnUS.dat", path);
+        }
+    }
+    if (strcmp(v->name, "Aria") != 0) {
+        char voc_dst[PATH_MAX];
+        snprintf(voc_dst, sizeof voc_dst, "%s/device_vocoder_v6_streaming.bin", G.work[i]);
+        if (access(voc_dst, R_OK)) {
+            snprintf(path, sizeof path, "%s/Jenny/device_vocoder_v6_streaming.bin", data_dir);
+            if (link_to(G.work[i], "device_vocoder_v6_streaming.bin", path) && g_extra_nv_dir[0]) {
+                snprintf(path, sizeof path, "%s/Jenny/device_vocoder_v6_streaming.bin", g_extra_nv_dir);
+                link_to(G.work[i], "device_vocoder_v6_streaming.bin", path);
+            }
         }
     }
     G.prepared[i] = 1;
@@ -434,7 +502,7 @@ int cvn_voice_speak(cvn_voice *v, const char *utf8, double sapi_rate, double sem
     size_t have = 0;
     int rc = 0, stopped = 0, status = 0;
     if (!v || !utf8 || !fn) return -1;
-    clean = cv_sanitize_alloc(utf8);
+    clean = cv_sanitize_unicode_alloc(utf8);
     if (!clean) return -1;
     for (p = clean; *p == ' '; p++) {}
     if (!*p) { /* nothing speakable: no audio, and never any stand-in text */

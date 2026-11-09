@@ -4,6 +4,44 @@
 #include <string.h>
 #include <stdlib.h>
 
+#ifdef _WIN32
+#include <direct.h>
+#include <io.h>
+#define strcasecmp _stricmp
+#define strncasecmp _strnicmp
+#ifndef S_ISDIR
+#define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
+#endif
+#define emu_mkdir(p) _mkdir(p)
+typedef struct dirent { char d_name[260]; } dirent;
+typedef struct DIR { intptr_t h; struct _finddata_t fd; int first; struct dirent de; } DIR;
+static inline DIR *opendir(const char *path) {
+    char pat[1100];
+    snprintf(pat, sizeof pat, "%s/*", path);
+    DIR *d = (DIR *)calloc(1, sizeof(DIR));
+    if (!d) return NULL;
+    d->h = _findfirst(pat, &d->fd);
+    if (d->h == -1) { free(d); return NULL; }
+    d->first = 1;
+    return d;
+}
+static inline struct dirent *readdir(DIR *d) {
+    if (!d) return NULL;
+    if (d->first) d->first = 0;
+    else if (_findnext(d->h, &d->fd) != 0) return NULL;
+    snprintf(d->de.d_name, sizeof d->de.d_name, "%s", d->fd.name);
+    return &d->de;
+}
+static inline int closedir(DIR *d) {
+    if (!d) return -1;
+    if (d->h != -1) _findclose(d->h);
+    free(d);
+    return 0;
+}
+#else
+#define emu_mkdir(p) mkdir((p), 0755)
+#endif
+
 enum { T_RUNNABLE, T_BLOCKED, T_WAIT_RETURN, T_HOST, T_DEAD };
 enum { STOP_NONE, STOP_RETURN, STOP_BLOCK, STOP_YIELD, STOP_EXIT };
 
@@ -29,6 +67,7 @@ typedef struct Thread {
     uint32_t exit_code;
     MsgQ mq;                // per-thread message queue (only used with emu_enable_thread_queues)
     int handle_closed;      // CloseHandle was called on its handle while it ran (thread-queue mode)
+    uint32_t tls[64];
 } Thread;
 
 enum { H_FREE, H_EVENT, H_THREAD, H_FILE, H_FIND, H_KEY };
@@ -119,6 +158,8 @@ struct Emu {
     uint32_t malloc_obj;        // CoGetMalloc's host IMalloc (ole32), created on first use
     uint32_t iob;               // MSVCRT _iob[20] (FILE, 32 bytes each), created on first use
     uint32_t crt_data[8];       // other MSVCRT data imports (crt.c crt_data_defs), created when first imported
+    uint64_t tls_mask;
+    uint32_t cmdline_a, env_a, env_w;
 
     EmuStats stats;
 };

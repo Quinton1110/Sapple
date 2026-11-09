@@ -11,6 +11,8 @@ OneCoreVoice/
 TruVoiceData/
 NeuralVoices/
 NeuralSDK/
+ProTalkerVoice/
+*.pack
 _installers/
 
 # Microsoft SAPI 5 voice data (Sam, Mike, Mary)
