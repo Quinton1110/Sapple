@@ -149,6 +149,39 @@ final class ClassicEngine {
 
     private init() {}
 
+    /// Case-insensitive file lookup inside `dir` (so VoiceData works whether staged as `Sam.spd` or `SAM.SPD`).
+    private static func hasFile(_ name: String, in dir: String) -> Bool {
+        let fm = FileManager.default
+        let exact = (dir as NSString).appendingPathComponent(name)
+        if fm.fileExists(atPath: exact) { return true }
+        let target = name.lowercased()
+        return (try? fm.contentsOfDirectory(atPath: dir))?.contains(where: { $0.lowercased() == target }) == true
+    }
+
+    /// Whether `def`'s voice data is present on disk, so uninstalled voices never appear in VoiceOver or the picker.
+    func isVoiceAvailable(_ def: ClassicVoiceDef) -> Bool {
+        switch def.engine {
+        case .sapi5:
+            return Self.hasFile(def.spd + ".spd", in: dataDir) &&
+                   Self.hasFile(def.spd + ".sdf", in: dataDir) &&
+                   Self.hasFile("LTTS1033.LXA", in: dataDir) &&
+                   Self.hasFile("r1033tts.LXA", in: dataDir)
+        case .sapi4:
+            return Self.hasFile("msttssyn.dll", in: sapi4DataDir)
+        case .truvoice:
+            return true
+        case .anna:
+            return Self.hasFile("M1033DSK.KEY", in: annaDataDir) &&
+                   Self.hasFile("M1033DSK.APM", in: annaDataDir)
+        case .onecore:
+            let suffix = def.oneCoreVoice.lowercased() + ".ini"
+            return (try? FileManager.default.contentsOfDirectory(atPath: oneCoreDataDir))?
+                .contains(where: { $0.lowercased().hasSuffix(suffix) }) == true
+        case .neural:
+            return cvn_voice_has_data(neuralSDKDir, neuralDataDir, oneCoreDataDir, def.neuralVoice) != 0
+        }
+    }
+
     /// Handles are pooled per engine instance: a OneCore voice's emotion presets share one handle (the emotion is
     /// a per-utterance setting), every other voice pools by its slug.
     private static func poolKey(_ def: ClassicVoiceDef) -> String {
