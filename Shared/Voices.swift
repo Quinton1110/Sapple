@@ -147,18 +147,96 @@ let ONECORE_EMOTION_VOICES: Set<String> = ["David", "Zira", "Mark", "Eva"]
 /// has no presets; LCID 3081 and the en-AU data Catherine and James use).
 /// Only David, Zira, Mark and Eva have emotion presets (ONECORE_EMOTION_VOICES), whatever their language tag.
 /// Slugs "onecore_<voice>" and "onecore_<voice>_<emotion>" are permanent.
-let ONECORE_VOICES: [ClassicVoiceDef] = [("David", false, "en-US"), ("Zira", true, "en-US"), ("Mark", false, "en-US"),
-                                         ("Hazel", true, "en-GB"), ("George", false, "en-GB"), ("Susan", true, "en-GB"),
-                                         ("Eva", true, "en-US"), ("Sarah", true, "en-GB"),
-                                         ("Catherine", true, "en-AU"), ("James", false, "en-AU"),
-                                         ("Linda", true, "en-US"), ("Richard", false, "en-US"),
-                                         ("Matilda", true, "en-AU")]
-    .flatMap { name, female, language in
-        (ONECORE_EMOTION_VOICES.contains(name) ? ["", "happy", "sad", "angry"] : [""]).map { emotion in
-            ClassicVoiceDef(slug: "onecore_" + name.lowercased() + (emotion.isEmpty ? "" : "_" + emotion),
-                            display: name + (emotion.isEmpty ? "" : " " + emotion.capitalized),
-                            spd: "", effect: "none", basePitch: 0, female: female, engine: .onecore,
-                            oneCoreVoice: name, emotion: emotion, language: language)
+private struct OneCoreSpec {
+    let slug: String
+    let voice: String
+    let display: String
+    let female: Bool
+    let language: String
+    init(_ voice: String, _ female: Bool, _ language: String) {
+        self.slug = voice.lowercased()
+        self.voice = voice
+        self.display = voice
+        self.female = female
+        self.language = language
+    }
+    init(slug: String, voice: String, display: String, female: Bool, language: String) {
+        self.slug = slug
+        self.voice = voice
+        self.display = display
+        self.female = female
+        self.language = language
+    }
+}
+
+let ONECORE_VOICES: [ClassicVoiceDef] = [
+    // Original 13 English voices (exact slug and display order preserved)
+    OneCoreSpec("David", false, "en-US"), OneCoreSpec("Zira", true, "en-US"), OneCoreSpec("Mark", false, "en-US"),
+    OneCoreSpec("Hazel", true, "en-GB"), OneCoreSpec("George", false, "en-GB"), OneCoreSpec("Susan", true, "en-GB"),
+    OneCoreSpec("Eva", true, "en-US"), OneCoreSpec("Sarah", true, "en-GB"),
+    OneCoreSpec("Catherine", true, "en-AU"), OneCoreSpec("James", false, "en-AU"),
+    OneCoreSpec("Linda", true, "en-US"), OneCoreSpec("Richard", false, "en-US"),
+    OneCoreSpec("Matilda", true, "en-AU"),
+    // Additional English OneCore voices (en-CA under en-US for VoiceOver visibility, en-IE, en-IN)
+    OneCoreSpec(slug: "eva_ca", voice: "EvaCA", display: "Eva (Canada)", female: true, language: "en-US"),
+    OneCoreSpec("Sean", false, "en-IE"),
+    OneCoreSpec("Heera", true, "en-IN"), OneCoreSpec("Koyal", true, "en-IN"), OneCoreSpec("Ravi", false, "en-IN"),
+    // Multilingual Windows 10 / 11 OneCore & Cortana neural voices (ar, bg, ca, cs, da, de, el, es, fi, fr, he, hi, hr, hu, id, it, ja, ko, ms, nb, nl, pl, pt, ro, ru, sk, sl, sv, ta, th, tr, vi, zh)
+    OneCoreSpec("Naayf", false, "ar-SA"), OneCoreSpec("Hoda", true, "ar-SA"),
+    OneCoreSpec("Ivan", false, "bg-BG"),
+    OneCoreSpec("Herena", true, "ca-ES"),
+    OneCoreSpec("Jakub", false, "cs-CZ"),
+    OneCoreSpec("Helle", true, "da-DK"),
+    OneCoreSpec("Michael", false, "de-DE"), OneCoreSpec("Karsten", false, "de-DE"),
+    OneCoreSpec("Hedda", true, "de-DE"), OneCoreSpec("Katja", true, "de-DE"),
+    OneCoreSpec(slug: "katjav2", voice: "KatjaV2", display: "Katja V2", female: true, language: "de-DE"),
+    OneCoreSpec("Stefan", false, "de-DE"),
+    OneCoreSpec("Stefanos", false, "el-GR"),
+    OneCoreSpec(slug: "ana_es", voice: "AnaES", display: "Ana (Spain)", female: true, language: "es-ES"),
+    OneCoreSpec("Helena", true, "es-ES"), OneCoreSpec("Laura", true, "es-ES"), OneCoreSpec("Pablo", false, "es-ES"),
+    OneCoreSpec("Mila", true, "es-MX"), OneCoreSpec("Raul", false, "es-MX"), OneCoreSpec("Sabina", true, "es-MX"),
+    OneCoreSpec("Heidi", true, "fi-FI"),
+    OneCoreSpec("Caroline", true, "fr-CA"), OneCoreSpec("Claude", false, "fr-CA"),
+    OneCoreSpec(slug: "nathalie_ca", voice: "NathalieCA", display: "Nathalie (Canada)", female: true, language: "fr-CA"),
+    OneCoreSpec("Hortense", true, "fr-FR"), OneCoreSpec("Julie", true, "fr-FR"),
+    OneCoreSpec("Nathalie", true, "fr-FR"), OneCoreSpec("Paul", false, "fr-FR"),
+    OneCoreSpec("Guillaume", false, "fr-FR"),
+    OneCoreSpec("Asaf", false, "he-IL"),
+    OneCoreSpec("Hemant", false, "hi-IN"), OneCoreSpec("Kalpana", true, "hi-IN"),
+    OneCoreSpec("Matej", false, "hr-HR"),
+    OneCoreSpec("Szabolcs", false, "hu-HU"),
+    OneCoreSpec("Andika", false, "id-ID"),
+    OneCoreSpec("Cosimo", false, "it-IT"), OneCoreSpec("Elsa", true, "it-IT"),
+    OneCoreSpec(slug: "elsav2", voice: "ElsaV2", display: "Elsa V2", female: true, language: "it-IT"),
+    OneCoreSpec("Ayumi", true, "ja-JP"), OneCoreSpec("Haruka", true, "ja-JP"),
+    OneCoreSpec("Ichiro", false, "ja-JP"), OneCoreSpec("Sayaka", true, "ja-JP"),
+    OneCoreSpec("Heami", true, "ko-KR"),
+    OneCoreSpec("Rizwan", false, "ms-MY"),
+    OneCoreSpec("Jon", false, "nb-NO"),
+    OneCoreSpec("Bart", false, "nl-BE"), OneCoreSpec("Frank", false, "nl-NL"),
+    OneCoreSpec("Adam", false, "pl-PL"), OneCoreSpec("Paulina", true, "pl-PL"),
+    OneCoreSpec(slug: "ana_br", voice: "AnaBR", display: "Ana (Brazil)", female: true, language: "pt-BR"),
+    OneCoreSpec("Daniel", false, "pt-BR"), OneCoreSpec("Maria", true, "pt-BR"),
+    OneCoreSpec("Helia", true, "pt-PT"),
+    OneCoreSpec("Andrei", false, "ro-RO"),
+    OneCoreSpec("Irina", true, "ru-RU"), OneCoreSpec("Pavel", false, "ru-RU"),
+    OneCoreSpec("Filip", false, "sk-SK"),
+    OneCoreSpec("Lado", false, "sl-SI"),
+    OneCoreSpec("Bengt", false, "sv-SE"),
+    OneCoreSpec("Valluvar", false, "ta-IN"),
+    OneCoreSpec("Pattara", false, "th-TH"),
+    OneCoreSpec("Tolga", false, "tr-TR"),
+    OneCoreSpec("An", false, "vi-VN"),
+    OneCoreSpec("Hongyu", true, "zh-CN"), OneCoreSpec("Huihui", true, "zh-CN"),
+    OneCoreSpec("Kangkang", false, "zh-CN"), OneCoreSpec("Yaoyao", true, "zh-CN"),
+    OneCoreSpec("Danny", false, "zh-HK"), OneCoreSpec("Tracy", true, "zh-HK")
+]
+    .flatMap { spec in
+        (ONECORE_EMOTION_VOICES.contains(spec.voice) ? ["", "happy", "sad", "angry"] : [""]).map { emotion in
+            ClassicVoiceDef(slug: "onecore_" + spec.slug + (emotion.isEmpty ? "" : "_" + emotion),
+                            display: spec.display + (emotion.isEmpty ? "" : " " + emotion.capitalized),
+                            spd: "", effect: "none", basePitch: 0, female: spec.female, engine: .onecore,
+                            oneCoreVoice: spec.voice, emotion: emotion, language: spec.language)
         }
     }
 
@@ -225,6 +303,9 @@ let NEURAL_VOICES: [ClassicVoiceDef] = {
 }()
 
 enum VoiceCatalog {
+    /// Only the voices whose data files are actually staged in the bundle (used by VoiceOver and the app picker).
+    static let availableVoices: [ClassicVoiceDef] = CLASSIC_VOICES.filter { ClassicEngine.shared.isVoiceAvailable($0) }
+
     static func def(forIdentifier id: String) -> ClassicVoiceDef {
         let slug = id.split(separator: ".").last.map(String.init) ?? ""
         return CLASSIC_VOICES.first(where: { $0.slug == slug }) ?? CLASSIC_VOICES[0]

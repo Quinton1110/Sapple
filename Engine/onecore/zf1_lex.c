@@ -184,7 +184,7 @@ int zf1_phoneset_init(zf1_phoneset *ps, const uint8_t *res, size_t size)
     if (!res || size < 8) return -1;
     rs = zf_rd32(res);
     n = zf_rd32(res + 4);
-    if (n > 64) n = 64;
+    if (n > 128) n = 128;
     for (k = 0; k < n; k++) {
         const uint8_t *r = res + 8 + rs * k;
         int j;

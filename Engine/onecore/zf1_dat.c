@@ -105,29 +105,118 @@ static const zf1_domfile DOM_ENAU[] = {
 static const zf1_domfile DOM_ENCA[] = {
     {"address", "enCA.Address.dat"}, {"name", "enCA.Name.dat"}, {"message", "enCA.Message.dat"},
     {"computer", "enCA.Computer.dat"}, {"media", "enCA.Media.dat"}, {"companyName", "enCA.CompanyName.dat"}};
+static const zf1_domfile DOM_ENIE[] = {
+    {"address", "EnIE.Address.dat"}, {"name", "EnIE.Name.dat"}, {"message", "EnIE.Message.dat"},
+    {"computer", "EnIE.Computer.dat"}, {"companyName", "EnIE.CompanyName.dat"}, {"cityName", "EnIE.CityName.dat"}};
+static const zf1_domfile DOM_ENIN[] = {
+    {"address", "EnIN.address.dat"}, {"name", "EnIN.Name.dat"}, {"message", "EnIN.message.dat"},
+    {"computer", "EnIN.computer.dat"}};
+static const zf1_domfile DOM_DEAT[] = {
+    {"address", "DeAT.Address.dat"}, {"name", "DeAT.Name.dat"}, {"message", "DeAT.Message.dat"},
+    {"computer", "DeAT.Computer.dat"}};
+static const zf1_domfile DOM_DECH[] = {
+    {"address", "DeCH.Address.dat"}, {"name", "DeCH.Name.dat"}, {"message", "DeCH.Message.dat"},
+    {"computer", "DeCH.Computer.dat"}};
+static const zf1_domfile DOM_DEDE[] = {
+    {"address", "DeDE.Address.dat"}, {"name", "DeDE.Name.dat"}, {"message", "deDE.Message.dat"},
+    {"computer", "DeDE.Computer.dat"}};
+static const zf1_domfile DOM_ESES[] = {
+    {"address", "EsES.Address.dat"}, {"name", "EsES.Name.dat"}, {"message", "esES.Message.dat"},
+    {"computer", "EsES.Computer.dat"}};
+static const zf1_domfile DOM_ESMX[] = {
+    {"name", "EsMX.Name.dat"}, {"message", "EsMX.Message.dat"}, {"computer", "EsMX.Computer.dat"}};
+static const zf1_domfile DOM_FRCA[] = {
+    {"address", "FrCA.Address.dat"}, {"name", "FrCA.Name.dat"}, {"message", "FrCA.Message.dat"},
+    {"computer", "FrCA.Computer.dat"}};
+static const zf1_domfile DOM_FRFR[] = {
+    {"address", "FrFR.Address.dat"}, {"name", "FrFR.Name.dat"}, {"message", "frFR.Message.dat"},
+    {"computer", "FrFR.Computer.dat"}};
+static const zf1_domfile DOM_FRCH[] = {
+    {"address", "FrCH.Address.dat"}, {"name", "FrCH.Name.dat"}, {"message", "FrCH.Message.dat"},
+    {"computer", "FrCH.Computer.dat"}};
+static const zf1_domfile DOM_ITIT[] = {
+    {"address", "ItIT.Address.dat"}, {"name", "ItIT.Name.dat"}, {"message", "itIT.Message.dat"},
+    {"computer", "ItIT.Computer.dat"}};
+static const zf1_domfile DOM_JAJP[] = {
+    {"address", "JaJP.address.dat"}, {"name", "JaJP.name.dat"}, {"message", "JaJP.message.dat"},
+    {"companyName", "JaJP.CompanyName.dat"}};
+static const zf1_domfile DOM_PLPL[] = {
+    {"address", "PlPL.Address.dat"}, {"name", "PlPL.Name.dat"}, {"message", "PlPL.Message.dat"},
+    {"computer", "PlPL.Computer.dat"}};
+static const zf1_domfile DOM_PTBR[] = {
+    {"address", "PtBR.Address.dat"}, {"name", "PtBR.name.dat"}, {"message", "PtBR.message.dat"}};
+static const zf1_domfile DOM_RURU[] = {
+    {"address", "RuRU.Address.dat"}, {"name", "RuRU.Name.dat"}, {"message", "RuRU.Message.dat"},
+    {"computer", "RuRU.Computer.dat"}};
+static const zf1_domfile DOM_SVSE[] = {
+    {"name", "SvSE.Name.dat"}};
+static const zf1_domfile DOM_ZHCN[] = {
+    {"address", "ZhCN.Address.dat"}, {"name", "ZhCN.Name.dat"}, {"message", "ZhCN.Message.dat"}};
+static const zf1_domfile DOM_ZHHK[] = {
+    {"address", "ZhHK.Address.dat"}, {"name", "ZhHK.Name.dat"}, {"message", "ZhHK.Message.dat"}};
 #define DOMS(t) (*tab = t, (int)(sizeof t / sizeof *t))
 
 int zf1_domain_files(int lcid, const zf1_domfile **tab)
 {
-    if (lcid == 2057) { *tab = DOM_ENGB; return (int)(sizeof DOM_ENGB / sizeof *DOM_ENGB); }
-    if (lcid == 3081) return DOMS(DOM_ENAU);
-    if (lcid == 4105) return DOMS(DOM_ENCA);
+    switch (lcid) {
+    case 2057: return DOMS(DOM_ENGB);
+    case 3081: return DOMS(DOM_ENAU);
+    case 4105: return DOMS(DOM_ENCA);
+    case 6153: return DOMS(DOM_ENIE);
+    case 16393: return DOMS(DOM_ENIN);
+    case 3079: return DOMS(DOM_DEAT);
+    case 2055: return DOMS(DOM_DECH);
+    case 1031: return DOMS(DOM_DEDE);
+    case 3082: return DOMS(DOM_ESES);
+    case 2058: return DOMS(DOM_ESMX);
+    case 3084: return DOMS(DOM_FRCA);
+    case 1036: return DOMS(DOM_FRFR);
+    case 4108: return DOMS(DOM_FRCH);
+    case 1040: return DOMS(DOM_ITIT);
+    case 1041: return DOMS(DOM_JAJP);
+    case 1045: return DOMS(DOM_PLPL);
+    case 1046: return DOMS(DOM_PTBR);
+    case 1049: return DOMS(DOM_RURU);
+    case 1053: return DOMS(DOM_SVSE);
+    case 2052: return DOMS(DOM_ZHCN);
+    case 3076: return DOMS(DOM_ZHHK);
+    }
     *tab = NULL;
     return 0;
 }
 
+static char flip_case(char c)
+{
+    if (c >= 'a' && c <= 'z') return (char)(c - 32);
+    if (c >= 'A' && c <= 'Z') return (char)(c + 32);
+    return c;
+}
+
 int zf1_dat_load_ci(zf1_dat *d, char *path)
 {
-    size_t k = strlen(path);
-    int r = zf1_dat_load(d, path);
-    char c;
+    size_t k = strlen(path), n = k, dot = 0;
+    int r = zf1_dat_load(d, path), mask;
+    char orig[8];
     if (r != -1) return r;
     while (k > 0 && path[k - 1] != '/' && path[k - 1] != '\\') k--;
-    c = path[k];
-    if (c >= 'a' && c <= 'z') path[k] = (char)(c - 32);
-    else if (c >= 'A' && c <= 'Z') path[k] = (char)(c + 32);
-    else return r;
-    r = zf1_dat_load(d, path);
-    path[k] = c;
+    for (dot = k; dot < n && path[dot] != '.'; dot++);
+    orig[0] = path[k];
+    orig[1] = (dot + 1 < n) ? path[dot + 1] : 0;
+    orig[2] = (n >= 4 && path[n - 4] == '.') ? path[n - 3] : 0;
+    orig[3] = (n >= 4 && path[n - 4] == '.') ? path[n - 2] : 0;
+    orig[4] = (n >= 4 && path[n - 4] == '.') ? path[n - 1] : 0;
+    for (mask = 1; mask < 8 && r == -1; mask++) {
+        path[k] = (mask & 1) ? flip_case(orig[0]) : orig[0];
+        if (dot + 1 < n) path[dot + 1] = (mask & 2) ? flip_case(orig[1]) : orig[1];
+        if (orig[2]) {
+            path[n - 3] = (mask & 4) ? flip_case(orig[2]) : orig[2];
+            path[n - 2] = (mask & 4) ? flip_case(orig[3]) : orig[3];
+            path[n - 1] = (mask & 4) ? flip_case(orig[4]) : orig[4];
+        }
+        r = zf1_dat_load(d, path);
+    }
+    path[k] = orig[0];
+    if (dot + 1 < n) path[dot + 1] = orig[1];
+    if (orig[2]) { path[n - 3] = orig[2]; path[n - 2] = orig[3]; path[n - 1] = orig[4]; }
     return r;
 }
