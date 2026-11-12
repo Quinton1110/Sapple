@@ -95,8 +95,11 @@ final class ClassicEngine {
             candidates.append(appex.appendingPathComponent("Contents/Resources/OneCoreVoice"))   // macOS
             candidates.append(appex.appendingPathComponent("OneCoreVoice"))                      // iOS
         }
-        for c in candidates where fm.fileExists(atPath: c.appendingPathComponent("MSTTSLocEnUS.dat").path) {
-            return c.path
+        for c in candidates {
+            if let entries = try? fm.contentsOfDirectory(atPath: c.path),
+               entries.contains(where: { $0.hasPrefix("MSTTSLoc") }) {
+                return c.path
+            }
         }
         return candidates[0].path
     }()
@@ -148,6 +151,41 @@ final class ClassicEngine {
     }
 
     private init() {}
+
+    /// Case-insensitive file lookup inside `dir` (so VoiceData works whether staged as `Sam.spd` or `SAM.SPD`).
+    private static func hasFile(_ name: String, in dir: String) -> Bool {
+        let fm = FileManager.default
+        let exact = (dir as NSString).appendingPathComponent(name)
+        if fm.fileExists(atPath: exact) { return true }
+        let target = name.lowercased()
+        return (try? fm.contentsOfDirectory(atPath: dir))?.contains(where: { $0.lowercased() == target }) == true
+    }
+
+    /// Whether `def`'s voice data is present on disk, so uninstalled voices never appear in VoiceOver or the picker.
+    func isVoiceAvailable(_ def: ClassicVoiceDef) -> Bool {
+        let fm = FileManager.default
+        switch def.engine {
+        case .sapi5:
+            return Self.hasFile(def.spd + ".spd", in: dataDir) &&
+                   Self.hasFile(def.spd + ".sdf", in: dataDir) &&
+                   Self.hasFile("LTTS1033.LXA", in: dataDir) &&
+                   Self.hasFile("r1033tts.LXA", in: dataDir)
+        case .sapi4:
+            return Self.hasFile("msttssyn.dll", in: sapi4DataDir)
+        case .truvoice:
+            return true
+        case .anna:
+            return Self.hasFile("M1033DSK.KEY", in: annaDataDir) &&
+                   Self.hasFile("M1033DSK.APM", in: annaDataDir)
+        case .onecore:
+            return cvo_voice_has_data(oneCoreDataDir, def.oneCoreVoice) != 0
+        case .neural:
+            let core = (neuralSDKDir as NSString).appendingPathComponent("libMicrosoft.CognitiveServices.Speech.core.dylib")
+            guard let sz = (try? fm.attributesOfItem(atPath: core)[.size]) as? UInt64, sz > 65536 else { return false }
+            return fm.fileExists(atPath: (neuralDataDir as NSString).appendingPathComponent("model.key")) &&
+                   fm.fileExists(atPath: (neuralDataDir as NSString).appendingPathComponent(def.neuralVoice))
+        }
+    }
 
     /// Handles are pooled per engine instance: a OneCore voice's emotion presets share one handle (the emotion is
     /// a per-utterance setting), every other voice pools by its slug.

@@ -615,6 +615,9 @@ static int selftest(const char *dir, const char *od)
         bad = cvo_voice_open(NULL, "David", err, sizeof err);
         snprintf(what, sizeof what, "no data folder fails cleanly (never the Windows default): \"%s\"", err);
         check(bad == NULL && err[0], what);
+        check(cvo_voice_has_data(dir, "David") == 1 && cvo_voice_has_data("/nonexistent", "David") == 0 &&
+                  cvo_voice_has_data(dir, "Cortana") == 0 && cvo_voice_has_data(NULL, "David") == 0,
+              "cvo_voice_has_data: 1 for staged David, 0 for missing folder / unknown voice / NULL");
     }
     locale_checks(dir);
     for (i = 0; i < NVOICES; i++) selftest_voice(dir, VOICES[i], od);

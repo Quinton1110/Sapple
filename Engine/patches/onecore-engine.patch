@@ -683,7 +683,7 @@
 +#endif
 --- a/src/eva_nn.c
 +++ b/Engine/onecore/eva_nn.c
-@@ -0,0 +1,306 @@
+@@ -0,0 +1,313 @@
 +/* eva_nn.c - Eva's acoustic network (M1033Eva.TDAT), reconstructed from MSTTSEngine_OneCore.dll 10.3.21207.
 + * Function addresses are VAs in that DLL (image base 0x180000000).  See notes/eva_dnn.md.
 + * Keep -ffp-contract=off: every float statement below mirrors one SSE scalar instruction sequence. */
@@ -886,6 +886,13 @@
 +                 h + rd32(h + 0x30))) return -1;
 +    if (lin_init(&l->P, ptype, h + rd32(h + 0x58), rd16(h + 0x5c), (const uint8_t *)zeros, l->cell, l->out,
 +                 h + rd32(h + 0x28))) return -1;
++    if (gtype == EVA_LIN_INT16) {
++        l->U.wdeq = rdf(h + 0x3c) * 3.05180438e-5f;
++        l->V.wdeq = rdf(h + 0x34) * 3.05180438e-5f;
++    }
++    if (ptype == EVA_LIN_INT16) {
++        l->P.wdeq = rdf(h + 0x2c) * 3.05180438e-5f;
++    }
 +    l->peep_i = (const float *)(h + rd32(h + 0x60));
 +    l->peep_f = (const float *)(h + rd32(h + 0x64));
 +    l->peep_o = (const float *)(h + rd32(h + 0x68));
@@ -1074,7 +1081,7 @@
 +#endif
 --- a/src/eva_voice.c
 +++ b/Engine/onecore/eva_voice.c
-@@ -0,0 +1,482 @@
+@@ -0,0 +1,506 @@
 +/* eva_voice.c - Microsoft Eva back end (see eva_voice.h).  ClassicVoices addition, ported from ~/code/eva-onecore
 + * (notes/eva_dnn.md, notes/eva_prosody.md there).  Status legend: [S] = transcribed from the decompile of the
 + * Windows 11 26100.1742 DLLs, [G] = inferred.
@@ -1238,12 +1245,35 @@
 +
 +/* minimal INI reader for the Eva keys the ZbConfig loader does not keep */
 +static int ini_int(const char *path, const char *sec, const char *key, int def) {
-+    FILE *f = fopen(path, "r");
++    FILE *f = fopen(path, "rb");
 +    char line[512], cur[128] = "";
++    uint8_t *raw;
++    long rawsz = 0, pos = 0;
 +    int v = def;
 +    if (!f) return def;
-+    while (fgets(line, sizeof line, f)) {
++    fseek(f, 0, SEEK_END); rawsz = ftell(f); fseek(f, 0, SEEK_SET);
++    if (rawsz <= 0) { fclose(f); return def; }
++    raw = (uint8_t *)malloc((size_t)rawsz + 1);
++    if (!raw) { fclose(f); return def; }
++    rawsz = (long)fread(raw, 1, (size_t)rawsz, f);
++    fclose(f);
++    if (rawsz >= 2 && raw[0] == 0xff && raw[1] == 0xfe) {
++        long i, j = 0;
++        for (i = 2; i + 1 < rawsz; i += 2) {
++            uint16_t ch = (uint16_t)(raw[i] | (raw[i + 1] << 8));
++            if (ch && ch < 128) raw[j++] = (uint8_t)ch;
++        }
++        rawsz = j;
++    }
++    while (pos < rawsz) {
++        size_t l = 0;
 +        char *p = line, *q;
++        while (pos < rawsz && raw[pos] != '\n') {
++            if (raw[pos] != '\r' && l + 1 < sizeof line) line[l++] = (char)raw[pos];
++            pos++;
++        }
++        if (pos < rawsz && raw[pos] == '\n') pos++;
++        line[l] = 0;
 +        while (*p == ' ' || *p == '\t') p++;
 +        if (*p == '[') { q = strchr(p, ']'); if (q) { *q = 0; snprintf(cur, sizeof cur, "%s", p + 1); } continue; }
 +        q = strchr(p, '=');
@@ -1252,7 +1282,7 @@
 +        for (char *r = q - 1; r >= p && (*r == ' ' || *r == '\t'); r--) *r = 0;
 +        if (!strcmp(p, key)) v = atoi(q + 1);
 +    }
-+    fclose(f);
++    free(raw);
 +    return v;
 +}
 +
@@ -1309,7 +1339,7 @@
 +    if (eva_nnm_load(&e->nnm, path, err, errlen)) goto fail;
 +    data_path(path, sizeof path, vp, "HEQ");
 +    if (eva_heq_load(&e->heq, path, err, errlen)) goto fail;
-+    snprintf(path, sizeof path, "%s.INI", vp);
++    data_path(path, sizeof path, vp, "INI");
 +    e->heq_adj = (float)ini_int(path, "VoiceSetting", "LogF0HeqAdjustment", 100) / 100.0f;
 +    e->normk = (float)ini_int(path, "NN", "NumericLinguisticFeatureNormFactor", normk_default(lcid));
 +    e->dheq_adj = (float)ini_int(path, "VoiceSetting", "DurationHeqAdjustment", 100) / 100.0f;
@@ -1328,14 +1358,15 @@
 +        || e->nnm.stream[e->sF].nseg != 3
 +        || (e->sM >= 0 && (e->nnm.stream[e->sM].nseg != 3 || e->nnm.stream[e->sM].dim[0] > ZB_MBE_MAXBANDS)))
 +        { snprintf(err, errlen, "unexpected NNM / TDAT layout"); goto fail; }
-+    snprintf(path, sizeof path, "%s.%s", vp, ext[0]);
-+    e->has_crf = file_exists(path);
-+    if (e->has_crf) {   /* statistical prosody models: CLinguisticProsodyTagger model runners (loc model table: BR2, TON, ACL) */
++    {   /* statistical prosody models: load whichever of BR2, TON, ACL exist for this voice */
 +        EvaCrf **slot[3] = {&e->prosody.br2, &e->prosody.ton, &e->prosody.acl};
 +        for (int k = 0; k < 3; k++) {
-+            snprintf(path, sizeof path, "%s.%s", vp, ext[k]);
-+            *slot[k] = eva_crf_load(path, err, errlen);
-+            if (!*slot[k]) goto fail;
++            data_path(path, sizeof path, vp, ext[k]);
++            if (file_exists(path)) {
++                *slot[k] = eva_crf_load(path, err, errlen);
++                if (!*slot[k]) goto fail;
++                e->has_crf = 1;
++            }
 +        }
 +    }
 +    e->f_state = e->nnm.nfeat - 3; e->f_frames = e->nnm.nfeat - 2; e->f_pct = e->nnm.nfeat - 1;
@@ -1600,48 +1631,45 @@
 +}
 +#endif
 +#endif
---- a/src/zb.h
-+++ b/Engine/onecore/zb.h
-@@ -80,6 +80,9 @@
-     ZB_F_PrevPhraseSyllableNumber,         /* Phone.Syllable.Word.Phrase.PrevPhrase.SyllableNumber */
-     ZB_F_PrevPhraseWordNumber,             /* Phone.Syllable.Word.Phrase.PrevPhrase.WordNumber */
-     ZB_F_PhraseToBIFinalBoundaryTone,      /* Phone.Syllable.Word.Phrase.ToBIFinalBoundaryTone (Mark) */
-+    ZB_F_SylToBIAccent,                    /* Phone.Syllable.ToBIAccent (Eva) */
-+    ZB_F_PrevSylToBIAccent,                /* Phone.Syllable.PrevSyllable.ToBIAccent (Eva) */
-+    ZB_F_NextSylToBIAccent,                /* Phone.Syllable.NextSyllable.ToBIAccent (Eva) */
-     ZB_NFEAT
- };
- extern const char *const zb_feature_path[ZB_NFEAT];   /* full dotted APM path per column */
-@@ -162,6 +165,8 @@
-     int rate;           /* -10..10 */
-     int volume;         /* 0..100 */
-     ZbStyle style;      /* all zero = neutral */
-+    int rate_milli;     /* ClassicVoices patch: fraction of a rate step on top of everything else, in 1/1000 steps
-+                           (0..999; 0 = the original engine exactly) - see zira_tts_set_rate_f */
- } ZbSapi;
- 
- typedef struct ZbVoice ZbVoice;
-@@ -177,6 +182,7 @@
- ZbVoice *zb_voice_load(const char *voicepath, char *err, int errlen);
- void zb_voice_free(ZbVoice *v);
- int zb_voice_is_int(const ZbVoice *v);     /* 0 = float path (David), 1 = fixed-point path (Zira, Mark) */
-+int zb_voice_has_acoustics(const ZbVoice *v);   /* ClassicVoices addition: 0 for Eva's duration-only APM */
- 
- /* PCM sink: 16 kHz mono int16. Return 0 to continue. */
- typedef int (*zb_write_fn)(void *user, const short *pcm, int nsamples);
 --- a/src/zb_apm.c
 +++ b/Engine/onecore/zb_apm.c
-@@ -26,7 +26,8 @@
+@@ -26,7 +26,25 @@
      "Phone.Syllable.Word.PrevWord.SyllableNumber", "Phone.Syllable.Word.SyllableNumber", "Phone.PhoneIdentity",
      "Phone.Syllable.Word.FwPosInYesNoQuestion", "Phone.Syllable.Word.Phrase.NextPhrase.SyllableNumber",
      "Phone.Syllable.Word.Phrase.NextPhrase.WordNumber", "Phone.Syllable.Word.Phrase.PrevPhrase.SyllableNumber",
 -    "Phone.Syllable.Word.Phrase.PrevPhrase.WordNumber", "Phone.Syllable.Word.Phrase.ToBIFinalBoundaryTone"};
 +    "Phone.Syllable.Word.Phrase.PrevPhrase.WordNumber", "Phone.Syllable.Word.Phrase.ToBIFinalBoundaryTone",
-+    "Phone.Syllable.ToBIAccent", "Phone.Syllable.PrevSyllable.ToBIAccent", "Phone.Syllable.NextSyllable.ToBIAccent"};
++    "Phone.Syllable.ToBIAccent", "Phone.Syllable.PrevSyllable.ToBIAccent", "Phone.Syllable.NextSyllable.ToBIAccent",
++    "Phone.Syllable.Accent", "Phone.Syllable.AccentedSyllNumAfterCurrSyll",
++    "Phone.Syllable.AccentedSyllNumBeforeCurrSyll", "Phone.Syllable.BwPosInProsodicWord",
++    "Phone.Syllable.BwPosInSentence", "Phone.Syllable.ChineseToneIndex",
++    "Phone.Syllable.FwPosInProsodicWord", "Phone.Syllable.FwPosInSentence",
++    "Phone.Syllable.NextSyllable.ChineseToneIndex", "Phone.Syllable.NextSyllable.Tone",
++    "Phone.Syllable.PrevSyllable.ChineseToneIndex", "Phone.Syllable.PrevSyllable.Tone",
++    "Phone.Syllable.SyllNumFromLeftAccent", "Phone.Syllable.SyllNumToRightAccent",
++    "Phone.Syllable.Tone", "Phone.Syllable.Word.NextWord.POSTaggerPOS",
++    "Phone.Syllable.Word.POSTaggerPOS", "Phone.Syllable.Word.Phrase.ItmPhraseNumOfItnPhrase",
++    "Phone.Syllable.Word.Phrase.NextPhrase.PrimaryAccentPosition",
++    "Phone.Syllable.Word.Phrase.PrevPhrase.PrimaryAccentPosition",
++    "Phone.Syllable.Word.Phrase.PrimaryAccentPosition", "Phone.Syllable.Word.Phrase.SyllNumOfItnPhrase",
++    "Phone.Syllable.Word.Phrase.WordNumOfItnPhrase", "Phone.Syllable.Word.PrevWord.POSTaggerPOS",
++    "Phone.Syllable.Word.ProsodicWord.BwPosInPhrase", "Phone.Syllable.Word.ProsodicWord.BwPosInSentence",
++    "Phone.Syllable.Word.ProsodicWord.FwPosInPhrase", "Phone.Syllable.Word.ProsodicWord.FwPosInSentence",
++    "Phone.Syllable.Word.ProsodicWord.SyllableNumber", "Phone.Syllable.Word.ProsodicWord.WordNumber",
++    "Phone.ToneLevel"};
  
  static uint32_t rd32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
  static uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
-@@ -192,7 +193,7 @@
+@@ -94,7 +112,7 @@
+         uint32_t named = rd32(p);
+         nf = rd32(p + 4);
+         p += 8;
+-        if (nf > 64) { snprintf(err, errlen, "too many features"); return -1; }
++        if (nf > 128) { snprintf(err, errlen, "too many features"); return -1; }
+         v->nfeat = (int)nf;
+         for (i = 0; i < nf; i++) {
+             const char *s = name;
+@@ -192,7 +210,7 @@
          case ZB_M_PDUR: v->m_pdur = m; break;
          }
      }
@@ -1650,6 +1678,70 @@
      return 0;
  }
  
+@@ -228,7 +246,14 @@
+     uint32_t o = 4;
+     if (m->ntree > 1 || m->treeid[0] != 0x7fffffff) {
+         for (t = 0; t < m->ntree && m->treeid[t] != phoneid; t++);
+-        if (t == m->ntree) return NULL;
++        if (t == m->ntree) {
++            int alt = (phoneid == 24) ? 28 : (phoneid == 25) ? 38 : (phoneid == 26) ? 45 : 3;
++            for (t = 0; t < m->ntree && m->treeid[t] != alt; t++);
++            if (t == m->ntree) {
++                for (t = 0; t < m->ntree && m->treeid[t] != 3; t++);
++                if (t == m->ntree) t = 0;
++            }
++        }
+     }
+     blob = m->tree + m->suboff[t * m->nstate + state];
+     while (blob[o] == 0 && guard++ < 100000) {
+@@ -277,7 +302,8 @@
+ int zb_ini_load(ZbVoice *v, const char *path)
+ {
+     ZbConfig *c = &v->cfg;
+-    FILE *f;
++    uint8_t *raw;
++    size_t rawsz = 0, pos = 0;
+     char line[512], sec[128] = "";
+     /* ctor defaults (FUN_180017a48 / FUN_180056c00 / built-in table 0x18016d790) */
+     c->volume_adj = 100; c->sps_volume_adj = 100; c->pitch_adj = 100; c->rate_adj = 100; c->pitch_range_scale = 100;
+@@ -288,10 +314,25 @@
+     c->sh_low = 0.075f; c->sh_high = 0.4f;
+     c->qi_enabled = 0; c->qi_rate = 0; c->qi_max = 0;
+     c->delay_mode = 0; c->silence_noise_suppress = 0; c->sentence_boundary_ms = 0;
+-    f = fopen(path, "r");
+-    if (!f) return -1;
+-    while (fgets(line, sizeof line, f)) {
++    raw = readfile(path, &rawsz);
++    if (!raw) return -1;
++    if (rawsz >= 2 && raw[0] == 0xff && raw[1] == 0xfe) {
++        size_t i, j = 0;
++        for (i = 2; i + 1 < rawsz; i += 2) {
++            uint16_t ch = (uint16_t)(raw[i] | (raw[i + 1] << 8));
++            if (ch && ch < 128) raw[j++] = (uint8_t)ch;
++        }
++        rawsz = j;
++    }
++    while (pos < rawsz) {
++        size_t l = 0;
+         char *eq, key[128], val[256];
++        while (pos < rawsz && raw[pos] != '\n') {
++            if (raw[pos] != '\r' && l + 1 < sizeof line) line[l++] = (char)raw[pos];
++            pos++;
++        }
++        if (pos < rawsz && raw[pos] == '\n') pos++;
++        line[l] = 0;
+         trim(line);
+         if (line[0] == '[') {
+             char *e = strchr(line, ']');
+@@ -366,7 +407,7 @@
+         }
+ #undef IS
+     }
+-    fclose(f);
++    free(raw);
+     if (c->sh_step < 0) c->sh_step = c->sh_multi ? 0.3f : 0.4f;
+     if (c->pdur_weight < 0) c->pdur_weight = 0;
+     if (c->pdur_weight > 1) c->pdur_weight = 1;
 --- a/src/zb_dur.c
 +++ b/Engine/onecore/zb_dur.c
 @@ -102,8 +102,10 @@
@@ -1703,6 +1795,24 @@
      }
 --- a/src/zb_internal.h
 +++ b/Engine/onecore/zb_internal.h
+@@ -6,7 +6,7 @@
+ #include "zb.h"
+ 
+ #define ZB_MAXWIN 3
+-#define ZB_MAXDIM 75
++#define ZB_MAXDIM 128
+ #define ZB_NSTATE 5
+ 
+ /* model types (CHTSAcousticModelHeader +0) */
+@@ -77,7 +77,7 @@
+     int isint;                     /* APM header flag B (file 0x24) */
+     int rate, bits, shift;
+     int nfeat;                     /* APM features */
+-    int featcol[64];               /* APM feature index -> ZB_F_* */
++    int featcol[128];               /* APM feature index -> ZB_F_* */
+     int nq;
+     ZbQuestion *q;
+     int nmodel;
 @@ -122,12 +122,17 @@
  void zb_dur_rescale(unsigned *sum, unsigned target, int *dur, unsigned n);
  void zb_durations_ex(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const ZbGauss *gd, const ZbGauss *gp, int nstate,
@@ -1879,44 +1989,6 @@
 +    free(R);
 +    free(g);
 +}
---- a/src/zb_synth.c
-+++ b/Engine/onecore/zb_synth.c
-@@ -37,6 +37,8 @@
- }
- 
- int zb_voice_is_int(const ZbVoice *v) { return v->isint; }
-+/* ClassicVoices addition: 1 if the APM has the LSF and LF0 models (0 = Eva's duration-only APM) */
-+int zb_voice_has_acoustics(const ZbVoice *v) { return v->m_lsf && v->m_lf0; }
- 
- void zb_trace_free(ZbTrace *t)
- {
-@@ -176,7 +178,8 @@
- }
- 
- /* FUN_18001b100 (pitch) + FUN_1800a2810 (range); the SAPI controls plus the emotion recipe (ZbStyle, zb.h) */
--static void apply_pitch(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const int *dur, int nst, float *f0, int T)
-+/* ClassicVoices patch: exported (was static) for the Eva back end, eva_voice.c; unchanged */
-+void zb_apply_pitch(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const int *dur, int nst, float *f0, int T)
- {
-     const ZbConfig *cfg = &v->cfg;
-     int pa_adj = zb_style_pct(cfg->pitch_adj, sapi ? sapi->style.pitch : 0);
-@@ -235,6 +238,7 @@
-     int *stretch = NULL;
-     long nwav = 0;
-     const int D = 24;
-+    if (!v->m_lsf || !v->m_lf0) return -1;   /* duration-only APM (Eva) */
-     if (v->isint) return zb_synth_int(v, u, sapi, write, user, trace);
-     memset(&um, 0, sizeof um);
-     if (lookup(v, u, &um)) goto done;
-@@ -282,7 +286,7 @@
-     for (t = 0; t < T; t++)
-         if (lf0[t] != 0.0f) lf0[t] = (float)exp((double)lf0[t]);
-     zb_lsf_repair(lsf, T, D);
--    apply_pitch(v, u, sapi, um.dur, ns, lf0, T);
-+    zb_apply_pitch(v, u, sapi, um.dur, ns, lf0, T);
-     if (trace) {
-         trace->f0 = (float *)malloc(sizeof(float) * (T + 1)); memcpy(trace->f0, lf0, sizeof(float) * T);
-         trace->lsf_fin = (float *)malloc(sizeof(float) * (T * D + 1)); memcpy(trace->lsf_fin, lsf, sizeof(float) * T * D);
 --- a/src/zb_synth_int.c
 +++ b/Engine/onecore/zb_synth_int.c
 @@ -516,10 +516,12 @@
@@ -1931,6 +2003,84 @@
 +#endif
      zb_silence_zero(v, u, um.dur, ns, pcm);
      nwav = zb_wave_sps(v, u, sapi, um.dur, ns, um.stretch, blk, nblk, pcm, &wav);
+     rc = 0;
+--- a/src/zb_synth.c
++++ b/Engine/onecore/zb_synth.c
+@@ -10,14 +10,26 @@
+ void zb_apply_sapi_volume(const ZbUtt *u, const int *dur, int nstate, int shift, int sitevol, short *pcm);
+ int zb_synth_int(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn write, void *user, ZbTrace *trace);
+ 
++static void zb_ext_path(char *out, size_t cap, const char *vp, const char *UPPER, const char *lower)
++{
++    FILE *f;
++    snprintf(out, cap, "%s.%s", vp, UPPER);
++    f = fopen(out, "rb");
++    if (f) { fclose(f); return; }
++    snprintf(out, cap, "%s.%s", vp, lower);
++    f = fopen(out, "rb");
++    if (f) { fclose(f); return; }
++    snprintf(out, cap, "%s.%s", vp, UPPER);
++}
++
+ ZbVoice *zb_voice_load(const char *voicepath, char *err, int errlen)
+ {
+     ZbVoice *v = (ZbVoice *)calloc(1, sizeof *v);
+     char path[1024];
+     if (!v) return NULL;
+-    snprintf(path, sizeof path, "%s.APM", voicepath);
++    zb_ext_path(path, sizeof path, voicepath, "APM", "apm");
+     if (zb_apm_load(v, path, err, errlen)) { zb_voice_free(v); return NULL; }
+-    snprintf(path, sizeof path, "%s.INI", voicepath);
++    zb_ext_path(path, sizeof path, voicepath, "INI", "ini");
+     if (zb_ini_load(v, path)) { snprintf(err, errlen, "cannot read %s", path); zb_voice_free(v); return NULL; }
+     zb_vocoder_init(v);
+     zb_srand(v, 0x406);
+@@ -37,6 +49,8 @@
+ }
+ 
+ int zb_voice_is_int(const ZbVoice *v) { return v->isint; }
++/* ClassicVoices addition: 1 if the APM has the LSF and LF0 models (0 = Eva's duration-only APM) */
++int zb_voice_has_acoustics(const ZbVoice *v) { return v->m_lsf && v->m_lf0; }
+ 
+ void zb_trace_free(ZbTrace *t)
+ {
+@@ -176,7 +190,8 @@
+ }
+ 
+ /* FUN_18001b100 (pitch) + FUN_1800a2810 (range); the SAPI controls plus the emotion recipe (ZbStyle, zb.h) */
+-static void apply_pitch(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const int *dur, int nst, float *f0, int T)
++/* ClassicVoices patch: exported (was static) for the Eva back end, eva_voice.c; unchanged */
++void zb_apply_pitch(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const int *dur, int nst, float *f0, int T)
+ {
+     const ZbConfig *cfg = &v->cfg;
+     int pa_adj = zb_style_pct(cfg->pitch_adj, sapi ? sapi->style.pitch : 0);
+@@ -234,7 +249,9 @@
+     short *pcm = NULL, *wav = NULL;
+     int *stretch = NULL;
+     long nwav = 0;
+-    const int D = 24;
++    int D;
++    if (!v->m_lsf || !v->m_lf0) return -1;   /* duration-only APM (Eva) */
++    D = v->m_lsf->streamdim[0] / 3 - 1;
+     if (v->isint) return zb_synth_int(v, u, sapi, write, user, trace);
+     memset(&um, 0, sizeof um);
+     if (lookup(v, u, &um)) goto done;
+@@ -282,14 +299,14 @@
+     for (t = 0; t < T; t++)
+         if (lf0[t] != 0.0f) lf0[t] = (float)exp((double)lf0[t]);
+     zb_lsf_repair(lsf, T, D);
+-    apply_pitch(v, u, sapi, um.dur, ns, lf0, T);
++    zb_apply_pitch(v, u, sapi, um.dur, ns, lf0, T);
+     if (trace) {
+         trace->f0 = (float *)malloc(sizeof(float) * (T + 1)); memcpy(trace->f0, lf0, sizeof(float) * T);
+         trace->lsf_fin = (float *)malloc(sizeof(float) * (T * D + 1)); memcpy(trace->lsf_fin, lsf, sizeof(float) * T * D);
+     }
+     /* vocoder */
+     pcm = (short *)calloc((size_t)T * v->shift + 1, sizeof(short));
+-    zb_vocoder_float(v, u, um.dur, ns, T, lf0, lsf, gain, stretch, pcm);
++    zb_vocoder_float_p(v, u, um.dur, ns, T, lf0, lsf, gain, stretch, pcm, D);
+     nwav = zb_wave_sps(v, u, sapi, um.dur, ns, stretch, NULL, 0, pcm, &wav);   /* rate stage, voice + SAPI volume */
+     zb_srand(v, 0x406);   /* end-of-utterance vocoder reset (FUN_18011024c) */
      rc = 0;
 --- a/src/zb_vocoder.c
 +++ b/Engine/onecore/zb_vocoder.c
@@ -2085,6 +2235,66 @@
      if (c->word90 != 1) {
          /* + emotion.RateAdjustment - 100 (decompile 0x18004e2e5; see ZbStyle in zb.h) */
          int pct = zb_style_pct(cfg->rate_adj, sapi ? sapi->style.rate : 0), dom = 100, k;
+--- a/src/zb.h
++++ b/Engine/onecore/zb.h
+@@ -80,6 +80,40 @@
+     ZB_F_PrevPhraseSyllableNumber,         /* Phone.Syllable.Word.Phrase.PrevPhrase.SyllableNumber */
+     ZB_F_PrevPhraseWordNumber,             /* Phone.Syllable.Word.Phrase.PrevPhrase.WordNumber */
+     ZB_F_PhraseToBIFinalBoundaryTone,      /* Phone.Syllable.Word.Phrase.ToBIFinalBoundaryTone (Mark) */
++    ZB_F_SylToBIAccent,                    /* Phone.Syllable.ToBIAccent (Eva) */
++    ZB_F_PrevSylToBIAccent,                /* Phone.Syllable.PrevSyllable.ToBIAccent (Eva) */
++    ZB_F_NextSylToBIAccent,                /* Phone.Syllable.NextSyllable.ToBIAccent (Eva) */
++    ZB_F_SylAccent,                        /* Phone.Syllable.Accent */
++    ZB_F_SylAccentedSyllNumAfterCurrSyll,  /* Phone.Syllable.AccentedSyllNumAfterCurrSyll */
++    ZB_F_SylAccentedSyllNumBeforeCurrSyll, /* Phone.Syllable.AccentedSyllNumBeforeCurrSyll */
++    ZB_F_SylBwPosInProsodicWord,           /* Phone.Syllable.BwPosInProsodicWord */
++    ZB_F_SylBwPosInSentence,               /* Phone.Syllable.BwPosInSentence */
++    ZB_F_SylChineseToneIndex,              /* Phone.Syllable.ChineseToneIndex */
++    ZB_F_SylFwPosInProsodicWord,           /* Phone.Syllable.FwPosInProsodicWord */
++    ZB_F_SylFwPosInSentence,               /* Phone.Syllable.FwPosInSentence */
++    ZB_F_NextSylChineseToneIndex,          /* Phone.Syllable.NextSyllable.ChineseToneIndex */
++    ZB_F_NextSylTone,                      /* Phone.Syllable.NextSyllable.Tone */
++    ZB_F_PrevSylChineseToneIndex,          /* Phone.Syllable.PrevSyllable.ChineseToneIndex */
++    ZB_F_PrevSylTone,                      /* Phone.Syllable.PrevSyllable.Tone */
++    ZB_F_SylNumFromLeftAccent,             /* Phone.Syllable.SyllNumFromLeftAccent */
++    ZB_F_SylNumToRightAccent,              /* Phone.Syllable.SyllNumToRightAccent */
++    ZB_F_SylTone,                          /* Phone.Syllable.Tone */
++    ZB_F_NextWordPOSTaggerPOS,             /* Phone.Syllable.Word.NextWord.POSTaggerPOS */
++    ZB_F_WordPOSTaggerPOS,                 /* Phone.Syllable.Word.POSTaggerPOS */
++    ZB_F_PhraseItmPhraseNumOfItnPhrase,    /* Phone.Syllable.Word.Phrase.ItmPhraseNumOfItnPhrase */
++    ZB_F_NextPhrasePrimaryAccentPosition,  /* Phone.Syllable.Word.Phrase.NextPhrase.PrimaryAccentPosition */
++    ZB_F_PrevPhrasePrimaryAccentPosition,  /* Phone.Syllable.Word.Phrase.PrevPhrase.PrimaryAccentPosition */
++    ZB_F_PhrasePrimaryAccentPosition,      /* Phone.Syllable.Word.Phrase.PrimaryAccentPosition */
++    ZB_F_PhraseSyllNumOfItnPhrase,         /* Phone.Syllable.Word.Phrase.SyllNumOfItnPhrase */
++    ZB_F_PhraseWordNumOfItnPhrase,         /* Phone.Syllable.Word.Phrase.WordNumOfItnPhrase */
++    ZB_F_PrevWordPOSTaggerPOS,             /* Phone.Syllable.Word.PrevWord.POSTaggerPOS */
++    ZB_F_ProsodicWordBwPosInPhrase,        /* Phone.Syllable.Word.ProsodicWord.BwPosInPhrase */
++    ZB_F_ProsodicWordBwPosInSentence,      /* Phone.Syllable.Word.ProsodicWord.BwPosInSentence */
++    ZB_F_ProsodicWordFwPosInPhrase,        /* Phone.Syllable.Word.ProsodicWord.FwPosInPhrase */
++    ZB_F_ProsodicWordFwPosInSentence,      /* Phone.Syllable.Word.ProsodicWord.FwPosInSentence */
++    ZB_F_ProsodicWordSyllableNumber,       /* Phone.Syllable.Word.ProsodicWord.SyllableNumber */
++    ZB_F_ProsodicWordWordNumber,           /* Phone.Syllable.Word.ProsodicWord.WordNumber */
++    ZB_F_PhoneToneLevel,                   /* Phone.ToneLevel */
+     ZB_NFEAT
+ };
+ extern const char *const zb_feature_path[ZB_NFEAT];   /* full dotted APM path per column */
+@@ -162,6 +196,8 @@
+     int rate;           /* -10..10 */
+     int volume;         /* 0..100 */
+     ZbStyle style;      /* all zero = neutral */
++    int rate_milli;     /* ClassicVoices patch: fraction of a rate step on top of everything else, in 1/1000 steps
++                           (0..999; 0 = the original engine exactly) - see zira_tts_set_rate_f */
+ } ZbSapi;
+ 
+ typedef struct ZbVoice ZbVoice;
+@@ -177,6 +213,7 @@
+ ZbVoice *zb_voice_load(const char *voicepath, char *err, int errlen);
+ void zb_voice_free(ZbVoice *v);
+ int zb_voice_is_int(const ZbVoice *v);     /* 0 = float path (David), 1 = fixed-point path (Zira, Mark) */
++int zb_voice_has_acoustics(const ZbVoice *v);   /* ClassicVoices addition: 0 for Eva's duration-only APM */
+ 
+ /* PCM sink: 16 kHz mono int16. Return 0 to continue. */
+ typedef int (*zb_write_fn)(void *user, const short *pcm, int nsamples);
 --- a/src/zf.h
 +++ b/Engine/onecore/zf.h
 @@ -154,6 +154,10 @@
@@ -2112,7 +2322,65 @@
  int zf1_tok_add(zf1_toklist *l, int off, int len, int entity, const zf_char *cat, uint16_t pos)
  {
      if (l->n == l->cap) {
-@@ -477,7 +482,7 @@
+@@ -281,16 +286,47 @@
+     return r;
+ }
+ 
+-typedef struct { zf1_toklist *out; int base; } brk_ctx;
++static int is_cjk_or_thai(zf_char c)
++{
++    return (c >= 0x0e00 && c <= 0x0e7f) || (c >= 0x3040 && c <= 0x9fff) || (c >= 0xf900 && c <= 0xfaff);
++}
++typedef struct { zf1_ana *a; zf1_toklist *out; int base; } brk_ctx;
+ static int brk_emit(void *c, int off, int len)
+ {
+     brk_ctx *b = (brk_ctx *)c;
++    zf1_ana *a = b->a;
++    const zf_char *s = a->sbuf + b->base + off;
++    int i, has_ns = 0;
++    for (i = 0; i < len; i++) if (is_cjk_or_thai(s[i])) { has_ns = 1; break; }
++    if (has_ns && a->lex && len > 1) {
++        zf1_lexent ent;
++        if (!zf1_lex_lookup(a->lex, s, len, &ent)) {
++            int p = 0;
++            while (p < len) {
++                if (!is_cjk_or_thai(s[p])) {
++                    int q = p + 1;
++                    while (q < len && !is_cjk_or_thai(s[q])) q++;
++                    if (zf1_tok_add(b->out, b->base + off + p, q - p, 0, NULL, 0xFFFF) < 0) return -1;
++                    p = q;
++                    continue;
++                }
++                int maxl = len - p < 16 ? len - p : 16, best = 1, l;
++                for (l = maxl; l > 1; l--) {
++                    if (zf1_lex_lookup(a->lex, s + p, l, &ent)) { best = l; break; }
++                }
++                if (zf1_tok_add(b->out, b->base + off + p, best, 0, NULL, 0xFFFF) < 0) return -1;
++                p += best;
++            }
++            return 0;
++        }
++    }
+     return zf1_tok_add(b->out, b->base + off, len, 0, NULL, 0xFFFF);
+ }
+ 
+ int zf1_ana_break(zf1_ana *a, int off, int len, zf1_toklist *out)
+ {
+     brk_ctx b;
++    b.a = a;
+     b.out = out;
+     b.base = off;
+     return zf1_wb_break(a->wb, a->sbuf + off, len, 1, brk_emit, &b);
+@@ -318,7 +354,7 @@
+     size_t n;
+     const uint8_t *r = zf1_dat_get(d, 0xf6e4f50au, 0x80b9a5a3u, &n);
+     memset(ct, 0, sizeof *ct);
+-    if (!r || n < 4) return -1;
++    if (!r || n < 4) return 0;
+     ct->n = (int)zf_rd32(r);
+     ct->rec = r + 4;
+     ct->pool = r + 4 + 16 * (size_t)ct->n;
+@@ -477,7 +513,7 @@
  static int pron_node(zf1_ana *a, int node)
  {
      const zf1_node *nd = &a->fr->nd[node];
@@ -2170,7 +2438,7 @@
      free(d->buf);
      memset(d, 0, sizeof *d);
  }
-@@ -66,3 +92,42 @@
+@@ -66,3 +92,131 @@
      if (size) *size = 0;
      return NULL;
  }
@@ -2187,30 +2455,119 @@
 +static const zf1_domfile DOM_ENCA[] = {
 +    {"address", "enCA.Address.dat"}, {"name", "enCA.Name.dat"}, {"message", "enCA.Message.dat"},
 +    {"computer", "enCA.Computer.dat"}, {"media", "enCA.Media.dat"}, {"companyName", "enCA.CompanyName.dat"}};
++static const zf1_domfile DOM_ENIE[] = {
++    {"address", "EnIE.Address.dat"}, {"name", "EnIE.Name.dat"}, {"message", "EnIE.Message.dat"},
++    {"computer", "EnIE.Computer.dat"}, {"companyName", "EnIE.CompanyName.dat"}, {"cityName", "EnIE.CityName.dat"}};
++static const zf1_domfile DOM_ENIN[] = {
++    {"address", "EnIN.address.dat"}, {"name", "EnIN.Name.dat"}, {"message", "EnIN.message.dat"},
++    {"computer", "EnIN.computer.dat"}};
++static const zf1_domfile DOM_DEAT[] = {
++    {"address", "DeAT.Address.dat"}, {"name", "DeAT.Name.dat"}, {"message", "DeAT.Message.dat"},
++    {"computer", "DeAT.Computer.dat"}};
++static const zf1_domfile DOM_DECH[] = {
++    {"address", "DeCH.Address.dat"}, {"name", "DeCH.Name.dat"}, {"message", "DeCH.Message.dat"},
++    {"computer", "DeCH.Computer.dat"}};
++static const zf1_domfile DOM_DEDE[] = {
++    {"address", "DeDE.Address.dat"}, {"name", "DeDE.Name.dat"}, {"message", "deDE.Message.dat"},
++    {"computer", "DeDE.Computer.dat"}};
++static const zf1_domfile DOM_ESES[] = {
++    {"address", "EsES.Address.dat"}, {"name", "EsES.Name.dat"}, {"message", "esES.Message.dat"},
++    {"computer", "EsES.Computer.dat"}};
++static const zf1_domfile DOM_ESMX[] = {
++    {"name", "EsMX.Name.dat"}, {"message", "EsMX.Message.dat"}, {"computer", "EsMX.Computer.dat"}};
++static const zf1_domfile DOM_FRCA[] = {
++    {"address", "FrCA.Address.dat"}, {"name", "FrCA.Name.dat"}, {"message", "FrCA.Message.dat"},
++    {"computer", "FrCA.Computer.dat"}};
++static const zf1_domfile DOM_FRFR[] = {
++    {"address", "FrFR.Address.dat"}, {"name", "FrFR.Name.dat"}, {"message", "frFR.Message.dat"},
++    {"computer", "FrFR.Computer.dat"}};
++static const zf1_domfile DOM_FRCH[] = {
++    {"address", "FrCH.Address.dat"}, {"name", "FrCH.Name.dat"}, {"message", "FrCH.Message.dat"},
++    {"computer", "FrCH.Computer.dat"}};
++static const zf1_domfile DOM_ITIT[] = {
++    {"address", "ItIT.Address.dat"}, {"name", "ItIT.Name.dat"}, {"message", "itIT.Message.dat"},
++    {"computer", "ItIT.Computer.dat"}};
++static const zf1_domfile DOM_JAJP[] = {
++    {"address", "JaJP.address.dat"}, {"name", "JaJP.name.dat"}, {"message", "JaJP.message.dat"},
++    {"companyName", "JaJP.CompanyName.dat"}};
++static const zf1_domfile DOM_PLPL[] = {
++    {"address", "PlPL.Address.dat"}, {"name", "PlPL.Name.dat"}, {"message", "PlPL.Message.dat"},
++    {"computer", "PlPL.Computer.dat"}};
++static const zf1_domfile DOM_PTBR[] = {
++    {"address", "PtBR.Address.dat"}, {"name", "PtBR.name.dat"}, {"message", "PtBR.message.dat"}};
++static const zf1_domfile DOM_RURU[] = {
++    {"address", "RuRU.Address.dat"}, {"name", "RuRU.Name.dat"}, {"message", "RuRU.Message.dat"},
++    {"computer", "RuRU.Computer.dat"}};
++static const zf1_domfile DOM_SVSE[] = {
++    {"name", "SvSE.Name.dat"}};
++static const zf1_domfile DOM_ZHCN[] = {
++    {"address", "ZhCN.Address.dat"}, {"name", "ZhCN.Name.dat"}, {"message", "ZhCN.Message.dat"}};
++static const zf1_domfile DOM_ZHHK[] = {
++    {"address", "ZhHK.Address.dat"}, {"name", "ZhHK.Name.dat"}, {"message", "ZhHK.Message.dat"}};
 +#define DOMS(t) (*tab = t, (int)(sizeof t / sizeof *t))
 +
 +int zf1_domain_files(int lcid, const zf1_domfile **tab)
 +{
-+    if (lcid == 2057) { *tab = DOM_ENGB; return (int)(sizeof DOM_ENGB / sizeof *DOM_ENGB); }
-+    if (lcid == 3081) return DOMS(DOM_ENAU);
-+    if (lcid == 4105) return DOMS(DOM_ENCA);
++    switch (lcid) {
++    case 2057: return DOMS(DOM_ENGB);
++    case 3081: return DOMS(DOM_ENAU);
++    case 4105: return DOMS(DOM_ENCA);
++    case 6153: return DOMS(DOM_ENIE);
++    case 16393: return DOMS(DOM_ENIN);
++    case 3079: return DOMS(DOM_DEAT);
++    case 2055: return DOMS(DOM_DECH);
++    case 1031: return DOMS(DOM_DEDE);
++    case 3082: return DOMS(DOM_ESES);
++    case 2058: return DOMS(DOM_ESMX);
++    case 3084: return DOMS(DOM_FRCA);
++    case 1036: return DOMS(DOM_FRFR);
++    case 4108: return DOMS(DOM_FRCH);
++    case 1040: return DOMS(DOM_ITIT);
++    case 1041: return DOMS(DOM_JAJP);
++    case 1045: return DOMS(DOM_PLPL);
++    case 1046: return DOMS(DOM_PTBR);
++    case 1049: return DOMS(DOM_RURU);
++    case 1053: return DOMS(DOM_SVSE);
++    case 2052: return DOMS(DOM_ZHCN);
++    case 3076: return DOMS(DOM_ZHHK);
++    }
 +    *tab = NULL;
 +    return 0;
 +}
 +
++static char flip_case(char c)
++{
++    if (c >= 'a' && c <= 'z') return (char)(c - 32);
++    if (c >= 'A' && c <= 'Z') return (char)(c + 32);
++    return c;
++}
++
 +int zf1_dat_load_ci(zf1_dat *d, char *path)
 +{
-+    size_t k = strlen(path);
-+    int r = zf1_dat_load(d, path);
-+    char c;
++    size_t k = strlen(path), n = k, dot = 0;
++    int r = zf1_dat_load(d, path), mask;
++    char orig[8];
 +    if (r != -1) return r;
 +    while (k > 0 && path[k - 1] != '/' && path[k - 1] != '\\') k--;
-+    c = path[k];
-+    if (c >= 'a' && c <= 'z') path[k] = (char)(c - 32);
-+    else if (c >= 'A' && c <= 'Z') path[k] = (char)(c + 32);
-+    else return r;
-+    r = zf1_dat_load(d, path);
-+    path[k] = c;
++    for (dot = k; dot < n && path[dot] != '.'; dot++);
++    orig[0] = path[k];
++    orig[1] = (dot + 1 < n) ? path[dot + 1] : 0;
++    orig[2] = (n >= 4 && path[n - 4] == '.') ? path[n - 3] : 0;
++    orig[3] = (n >= 4 && path[n - 4] == '.') ? path[n - 2] : 0;
++    orig[4] = (n >= 4 && path[n - 4] == '.') ? path[n - 1] : 0;
++    for (mask = 1; mask < 8 && r == -1; mask++) {
++        path[k] = (mask & 1) ? flip_case(orig[0]) : orig[0];
++        if (dot + 1 < n) path[dot + 1] = (mask & 2) ? flip_case(orig[1]) : orig[1];
++        if (orig[2]) {
++            path[n - 3] = (mask & 4) ? flip_case(orig[2]) : orig[2];
++            path[n - 2] = (mask & 4) ? flip_case(orig[3]) : orig[3];
++            path[n - 1] = (mask & 4) ? flip_case(orig[4]) : orig[4];
++        }
++        r = zf1_dat_load(d, path);
++    }
++    path[k] = orig[0];
++    if (dot + 1 < n) path[dot + 1] = orig[1];
++    if (orig[2]) { path[n - 3] = orig[2]; path[n - 2] = orig[3]; path[n - 1] = orig[4]; }
 +    return r;
 +}
 --- a/src/zf1_eng.h
@@ -2351,6 +2708,32 @@
  void zf1_dat_free(zf1_dat *d);
  /* returns payload or NULL (= engine HRESULT 0x8004801A "not present") */
  const uint8_t *zf1_dat_get(const zf1_dat *d, uint32_t type1, uint32_t id1, size_t *size);
+--- a/src/zf1_lex.c
++++ b/Engine/onecore/zf1_lex.c
+@@ -184,7 +184,7 @@
+     if (!res || size < 8) return -1;
+     rs = zf_rd32(res);
+     n = zf_rd32(res + 4);
+-    if (n > 64) n = 64;
++    if (n > 128) n = 128;
+     for (k = 0; k < n; k++) {
+         const uint8_t *r = res + 8 + rs * k;
+         int j;
+--- a/src/zf1_lex.h
++++ b/Engine/onecore/zf1_lex.h
+@@ -58,9 +58,9 @@
+ /* ---- phone set ---- */
+ typedef struct zf1_phoneset {
+     int n;
+-    uint16_t id[64];
+-    char name[64][24];
+-    uint32_t flags[64];
++    uint16_t id[128];
++    char name[128][24];
++    uint32_t flags[128];
+     int byid[128];                      /* id -> index or -1 */
+ } zf1_phoneset;
+ int zf1_phoneset_init(zf1_phoneset *ps, const uint8_t *res, size_t size);
 --- a/src/zf1_lts.c
 +++ b/Engine/onecore/zf1_lts.c
 @@ -4,6 +4,11 @@
@@ -2411,6 +2794,43 @@
          m->pron.posobj = &m->pos;
 --- a/src/zf1_poly.c
 +++ b/Engine/onecore/zf1_poly.c
+@@ -53,7 +53,7 @@
+     const uint8_t *ptype, *words;
+     zf1_phoneset ps;
+     int nmodels;
+-    crfmodel m[16];
++    crfmodel m[32];
+     /* domain data (enUS.<Domain>.dat, zf1_acro_init): per-domain CPolyphony tables and the acronym CRFs */
+     int ndom;
+     char domname[ZF1_NDOM][16];
+@@ -555,15 +555,15 @@
+  * u32 namePoolOff, u32 modelsBase, u32 n, u32 modelOff[n], u32 nameOff[n] */
+ static int crf_load_list(crfmodel *mm, int max, const uint8_t *r)
+ {
+-    uint32_t sp, mb, n, i;
++    uint32_t sp, mb, ntotal, n, i;
+     if (!r) return -1;
+     sp = zf_rd32(r);
+     mb = zf_rd32(r + 4);
+-    n = zf_rd32(r + 8);
++    ntotal = n = zf_rd32(r + 8);
+     if (n > (uint32_t)max) n = (uint32_t)max;
+     for (i = 0; i < n; i++) {
+         crfmodel *m = &mm[i];
+-        const uint8_t *o = r + mb + zf_rd32(r + 12 + 4 * i), *nm = r + sp + zf_rd32(r + 12 + 4 * n + 4 * i);
++        const uint8_t *o = r + mb + zf_rd32(r + 12 + 4 * i), *nm = r + sp + zf_rd32(r + 12 + 4 * ntotal + 4 * i);
+         const uint8_t *pool, *t;
+         uint32_t k, triesz;
+         memset(m, 0, sizeof *m);
+@@ -664,7 +664,7 @@
+ static int load_models(polydata *pd, const zf1_dat *d)
+ {
+     size_t sz = 0;
+-    int n = crf_load_list(pd->m, 16, zf1_dat_get(d, 0xd49f77b9, 0x3e135d7f, &sz));
++    int n = crf_load_list(pd->m, 32, zf1_dat_get(d, 0xd49f77b9, 0x3e135d7f, &sz));
+     if (n < 0) return n;
+     pd->nmodels = n;
+     return 0;
 @@ -885,27 +885,42 @@
  }
  
@@ -2498,8 +2918,21 @@
          for (k = 0; k < 50; k++) {
 --- a/src/zf1_pron.c
 +++ b/Engine/onecore/zf1_pron.c
-@@ -118,11 +118,28 @@
-     return p->have_cart ? 0 : -1;
+@@ -106,7 +106,7 @@
+     p->sylmark = (uint16_t)zf1_phone_id(ps, "-", 1);
+     p->sep = (uint16_t)zf1_phone_id(ps, "&", 1);
+     p->morph = zf1_morph_create(d, lx, ps);
+-    zf1_pron_load_domains(p, "C:\\Windows\\Speech_OneCore\\Engines\\TTS\\en-US\\");
++    /* domain files are loaded per locale in zf1_modules_init */
+     r = zf1_dat_get(d, 0x19a6569a, 0xea8d0701, &n);            /* COMPOUNDPRON network */
+     if (r) {
+         p->compound = zf1_net_load(r, n);
+@@ -115,14 +115,31 @@
+             if (getenv("ZF1_CPN_LEX")) zf1_net_set_lexicon((zf1_net *)p->compound, zf1_pron_netlex_cb, p);
+         }
+     }
+-    return p->have_cart ? 0 : -1;
++    return 0;
  }
  
 -int zf1_pron_load_domains(zf1_pron *p, const char *dir)
@@ -2525,7 +2958,7 @@
 +        snprintf(p->dom[k].name, sizeof p->dom[k].name, "%s", loc[i].domain);
 +        p->ndom++;
 +    }
-+    if (nloc) return p->ndom;
++    if (nloc || lcid != 1033) return p->ndom;
      for (i = 0; i < 6 && p->ndom < 8; i++) {
          char path[1024];
          size_t n;
@@ -2542,13 +2975,36 @@
                         int maxpairs);
 --- a/src/zf1_wb.c
 +++ b/Engine/onecore/zf1_wb.c
-@@ -170,14 +170,23 @@
+@@ -160,9 +160,18 @@
+     return 0;
+ }
+ 
+-int zf1_wb_is_skip(const zf1_wb *wb, uint32_t c) { return bs32(wb->t0, wb->n0, c); }
+-int zf1_wb_is_split(const zf1_wb *wb, uint32_t c) { return bs32(wb->t1, wb->n1, c); }
+-int zf1_wb_is_trim(const zf1_wb *wb, uint32_t c) { return bs32(wb->t2, wb->n2, c); }
++int zf1_wb_is_skip(const zf1_wb *wb, uint32_t c) {
++    if (wb->n0 == 0 && wb->n1 == 0) return c <= 0x20 || c == 0xa0 || c == 0x3000;
++    return bs32(wb->t0, wb->n0, c);
++}
++int zf1_wb_is_split(const zf1_wb *wb, uint32_t c) {
++    if (wb->n0 == 0 && wb->n1 == 0)
++        return (c >= 0x21 && c <= 0x2f) || (c >= 0x3a && c <= 0x40) || (c >= 0x5b && c <= 0x60) ||
++               (c >= 0x7b && c <= 0x7e) || (c >= 0x3001 && c <= 0x303f) || (c >= 0xff01 && c <= 0xff0f) ||
++               (c >= 0xff1a && c <= 0xff20) || (c >= 0xff3b && c <= 0xff40) || (c >= 0xff5b && c <= 0xff65);
++    return bs32(wb->t1, wb->n1, c);
++}
++int zf1_wb_is_trim(const zf1_wb *wb, uint32_t c) { return wb->n2 ? bs32(wb->t2, wb->n2, c) : 0; }
+ static int is_break(const zf1_wb *wb, uint32_t c) { return zf1_wb_is_skip(wb, c) || zf1_wb_is_split(wb, c); }
+ 
+ int zf1_wb_init(zf1_wb *wb, const zf1_dat *d, uint16_t lang)
+@@ -170,14 +179,23 @@
      size_t sz;
      const uint8_t *r = zf1_dat_get(d, 0x629aa5c4u, 0x9756c4e5u, &sz), *p, *end;
      uint32_t nb;
 +    int old = 0;
      memset(wb, 0, sizeof *wb);
      wb->lang = lang;
+-    if (!r) return -1;
 +    /* ClassicVoices patch: MSTTSLocEnGB.dat carries only the older version 964f993a of this resource: the same three
 +       character tables, then ONE vocabulary trie with no size prefix (no emoticon / fixed-phrase trie: trie1 stays
 +       empty and never matches).  Found by reading the en-GB data; not checked against the engine's own reader. */
@@ -2556,7 +3012,7 @@
 +        r = zf1_dat_get(d, 0x629aa5c4u, 0x964f993au, &sz);
 +        old = 1;
 +    }
-     if (!r) return -1;
++    if (!r) return 0;
      p = r;
      end = r + sz;
      wb->n0 = (int)zf_rd32(p); wb->t0 = p + 4; p += 4 + 4 * (size_t)wb->n0;
@@ -2566,24 +3022,39 @@
      nb = zf_rd32(p);
      if (trie_init(&wb->trie0, p + 4, r)) return -2;
      p = p + 4 + ((nb + 3) & ~3u);
---- a/src/zf2.h
-+++ b/Engine/onecore/zf2.h
-@@ -30,6 +30,12 @@
-  * Returns NULL on failure. */
- zf2_voice *zf2_voice_load(const char *voicepath);
- void zf2_voice_free(zf2_voice *v);
-+/* Attach statistical prosody model runners (Eva); fn(ctx, zf2_sent*, stage 1 breaks / 2 tones / 3 accents). */
-+void zf2_voice_set_prosody_hook(zf2_voice *v, void (*fn)(void *ctx, void *sent, int stage), void *ctx);
-+/* ClassicVoices patch: take the phone set (ids, names, flags) from the language data's resource 29a5584b/153f1b64
-+ * instead of the built-in en-US one (identical to MSTTSLocEnUS.dat's).  Returns 0, or -1 (unchanged) if the
-+ * resource is missing or malformed. */
-+int zf2_voice_set_phoneset(zf2_voice *v, const uint8_t *res, size_t size);
- 
- /* ---- SAPI events produced for one sentence (audio offsets are filled by the backend from durations) ---- */
- enum { ZF2_EV_WORD = 5, ZF2_EV_PHONEME = 6, ZF2_EV_SENTENCE = 7, ZF2_EV_VISEME = 8, ZF2_EV_BOOKMARK = 4 };
 --- a/src/zf2_feat.c
 +++ b/Engine/onecore/zf2_feat.c
-@@ -159,7 +159,7 @@
+@@ -33,7 +33,11 @@
+     P_BwPosInWord = 0x0a, P_FwPosInPhrase = 0x0d, P_BwPosInPhrase = 0x0e, P_FwPosInSentence = 0x11,
+     P_BwPosInSentence = 0x12, P_Stress = 0x15, P_Accent = 0x16, P_POS = 0x17, P_POSTaggerPOS = 0x18,
+     P_ToBIFinalBoundaryTone = 0x19, P_BreakIndex = 0x2a, P_SentenceType = 0x2e, P_FwPosInYesNoQuestion = 0x2f,
+-    P_BwPosInYesNoQuestion = 0x30, P_Emphasis = 0x4c, P_ToBIAccent = 0x4f, P_SentenceEmotion = 0x54, P_Tone = 0x29
++    P_BwPosInYesNoQuestion = 0x30, P_Emphasis = 0x4c, P_ToBIAccent = 0x4f, P_SentenceEmotion = 0x54, P_Tone = 0x29,
++    P_FwPosInProsodicWord = 0x60, P_BwPosInProsodicWord = 0x61, P_ChineseToneIndex = 0x62, P_ToneLevel = 0x63,
++    P_AccentedSyllNumBeforeCurrSyll = 0x64, P_AccentedSyllNumAfterCurrSyll = 0x65,
++    P_SyllNumFromLeftAccent = 0x66, P_SyllNumToRightAccent = 0x67, P_PrimaryAccentPosition = 0x68,
++    P_ItmPhraseNumOfItnPhrase = 0x69, P_SyllNumOfItnPhrase = 0x6a, P_WordNumOfItnPhrase = 0x6b
+ };
+ static const struct { const char *name; int id; } PROP[] = {
+     {"PhoneIdentity", P_PhoneIdentity}, {"PhoneNumber", P_PhoneNumber}, {"SyllableNumber", P_SyllableNumber},
+@@ -45,7 +49,15 @@
+     {"POSTaggerPOS", P_POSTaggerPOS}, {"ToBIFinalBoundaryTone", P_ToBIFinalBoundaryTone},
+     {"BreakIndex", P_BreakIndex}, {"SentenceType", P_SentenceType}, {"FwPosInYesNoQuestion", P_FwPosInYesNoQuestion},
+     {"BwPosInYesNoQuestion", P_BwPosInYesNoQuestion}, {"Emphasis", P_Emphasis}, {"ToBIAccent", P_ToBIAccent},
+-    {"SentenceEmotion", P_SentenceEmotion}, {"Tone", P_Tone}};
++    {"SentenceEmotion", P_SentenceEmotion}, {"Tone", P_Tone},
++    {"FwPosInProsodicWord", P_FwPosInProsodicWord}, {"BwPosInProsodicWord", P_BwPosInProsodicWord},
++    {"ChineseToneIndex", P_ChineseToneIndex}, {"ToneLevel", P_ToneLevel},
++    {"AccentedSyllNumBeforeCurrSyll", P_AccentedSyllNumBeforeCurrSyll},
++    {"AccentedSyllNumAfterCurrSyll", P_AccentedSyllNumAfterCurrSyll},
++    {"SyllNumFromLeftAccent", P_SyllNumFromLeftAccent}, {"SyllNumToRightAccent", P_SyllNumToRightAccent},
++    {"PrimaryAccentPosition", P_PrimaryAccentPosition},
++    {"ItmPhraseNumOfItnPhrase", P_ItmPhraseNumOfItnPhrase},
++    {"SyllNumOfItnPhrase", P_SyllNumOfItnPhrase}, {"WordNumOfItnPhrase", P_WordNumOfItnPhrase}};
+ 
+ typedef struct { int level, i; } Node; /* i = -1: none */
+ 
+@@ -159,7 +171,7 @@
      const Z2S *y = &s->s[si];
      int k, m = 0;
      for (k = 0; k < y->np; k++) {
@@ -2592,12 +3063,215 @@
          if (v > m) m = v;
      }
      return m;
-@@ -337,6 +337,16 @@
+@@ -179,6 +191,42 @@
+     return n;
+ }
+ 
++static int phone_tone_level(const Z2Sent *s, int id)
++{
++    uint32_t fl = (id > 0 && id < Z2_PS_MAX) ? s->v->ps.flags[id] : 0;
++    if (fl & 0x40000u) return 1;
++    if (fl & 0x80000u) return 2;
++    if (fl & 0x100000u) return 3;
++    return 4;
++}
++static int syl_chinese_tone(const Z2Sent *s, int si)
++{
++    const Z2S *y = &s->s[si];
++    int k, first = 0, last = 0;
++    for (k = 0; k < y->np; k++) {
++        int tl = phone_tone_level(s, s->p[y->p0 + k].id);
++        if (tl <= 3) {
++            if (!first) first = tl;
++            last = tl;
++        }
++    }
++    if (!first) return 5;
++    if (first == 1 && last == 1) return 1;
++    if (first != 1 && last == 1) return 2;
++    if (first == 3) return 3;
++    if (last == 3) return 4;
++    return 5;
++}
++static int syl_tone(const Z2Sent *s, int si)
++{
++    const Z2S *y = &s->s[si];
++    int k;
++    for (k = 0; k < y->np; k++) {
++        int t = s->p[y->p0 + k].tone;
++        if (t > 0 && s->v->ps.t1 > 0 && t >= s->v->ps.t1) return t - s->v->ps.t1 + 1;
++    }
++    return 0;
++}
+ static int get_phone(const Z2Sent *s, int i, int prop, zf2_value *v)
+ {
+     const Z2P *p = &s->p[i];
+@@ -186,6 +234,7 @@
+     int wi = y->word;
+     switch (prop) {
+     case P_PhoneIdentity: return INT(v, p->id);
++    case P_ToneLevel: if (z2_phone_is_sil(s, p->id)) return NUL(v); return INT(v, phone_tone_level(s, p->id));
+     case P_FwPosInSyllable: if (z2_phone_is_sil(s, p->id)) return NUL(v); return INT(v, i - y->p0 + 1);
+     case P_BwPosInSyllable: if (z2_phone_is_sil(s, p->id)) return NUL(v); return INT(v, y->p0 + y->np - i);
+     case P_FwPosInWord: {
+@@ -208,13 +257,66 @@
+     if (z2_syl_is_sil(s, i)) {
+         switch (prop) {
+         case P_Stress: case P_Accent: case P_BreakIndex: case P_PhoneNumber: case P_FwPosInWord: case P_BwPosInWord:
+-        case P_FwPosInPhrase: case P_BwPosInPhrase: case P_ToBIAccent: return NUL(v);
++        case P_FwPosInPhrase: case P_BwPosInPhrase: case P_ToBIAccent:
++        case P_FwPosInProsodicWord: case P_BwPosInProsodicWord: case P_FwPosInSentence: case P_BwPosInSentence:
++        case P_Tone: case P_ChineseToneIndex: case P_AccentedSyllNumBeforeCurrSyll: case P_AccentedSyllNumAfterCurrSyll:
++        case P_SyllNumFromLeftAccent: case P_SyllNumToRightAccent: return NUL(v);
+         }
+         return -1;
+     }
+     switch (prop) {
+     case P_Stress: return ENU(v, syl_stress(s, i));
+     case P_Accent: return ENU(v, syl_stress(s, i) != 0 && w->emph == 1 ? 1 : 0);
++    case P_Tone: return INT(v, syl_tone(s, i));
++    case P_ChineseToneIndex: return INT(v, syl_chinese_tone(s, i));
++    case P_FwPosInSentence: {
++        int k, n = 0;
++        for (k = 0; k <= i; k++) if (!z2_syl_is_sil(s, k)) n++;
++        return INT(v, n);
++    }
++    case P_BwPosInSentence: {
++        int k, n = 0;
++        for (k = i; k < s->ns; k++) if (!z2_syl_is_sil(s, k)) n++;
++        return INT(v, n);
++    }
++    case P_FwPosInProsodicWord: case P_BwPosInProsodicWord: {
++        const Z2PW *pw;
++        int k, a = -1, b = -1;
++        if (w->pw < 0) return NUL(v);
++        pw = &s->pw[w->pw];
++        if (prop == P_FwPosInProsodicWord) {
++            for (k = pw->w0; k <= pw->w1; k++) if (z2_has_syl_pron(&s->w[k])) { a = s->w[k].s0; break; }
++            if (a < 0 || a > i) return NUL(v);
++            return INT(v, i - a + 1);
++        }
++        for (k = pw->w1; k >= pw->w0; k--) if (z2_has_syl_pron(&s->w[k])) { b = word_last_syl(s, k); break; }
++        if (b < 0 || b < i) return NUL(v);
++        return INT(v, b - i + 1);
++    }
++    case P_AccentedSyllNumBeforeCurrSyll: case P_AccentedSyllNumAfterCurrSyll:
++    case P_SyllNumFromLeftAccent: case P_SyllNumToRightAccent: {
++        const Z2PH *ph;
++        int k, a = -1, b = -1, cnt = 0;
++        if (w->phrase < 0) return NUL(v);
++        ph = &s->ph[w->phrase];
++        for (k = ph->w0; k <= ph->w1; k++) if (z2_has_syl_pron(&s->w[k])) { a = s->w[k].s0; break; }
++        for (k = ph->w1; k >= ph->w0; k--) if (z2_has_syl_pron(&s->w[k])) { b = word_last_syl(s, k); break; }
++        if (a < 0 || b < 0) return NUL(v);
++        if (prop == P_AccentedSyllNumBeforeCurrSyll) {
++            for (k = a; k < i; k++) if (!z2_syl_is_sil(s, k) && syl_stress(s, k) == 1) cnt++;
++            return INT(v, cnt);
++        }
++        if (prop == P_AccentedSyllNumAfterCurrSyll) {
++            for (k = i + 1; k <= b; k++) if (!z2_syl_is_sil(s, k) && syl_stress(s, k) == 1) cnt++;
++            return INT(v, cnt);
++        }
++        if (prop == P_SyllNumFromLeftAccent) {
++            for (k = i; k >= a; k--) if (!z2_syl_is_sil(s, k) && syl_stress(s, k) == 1) return INT(v, i - k + 1);
++            return NUL(v);
++        }
++        for (k = i; k <= b; k++) if (!z2_syl_is_sil(s, k) && syl_stress(s, k) == 1) return INT(v, k - i + 1);
++        return NUL(v);
++    }
+     case P_BreakIndex: return INT(v, i == word_last_syl(s, y->word) ? w->bi : 1);
+     case P_PhoneNumber: return INT(v, y->np);
+     case P_FwPosInWord: return INT(v, i - w->s0 + 1);
+@@ -292,7 +394,8 @@
+     if (z2_phrase_is_break(s, i)) {
+         switch (prop) {
+         case P_SyllableNumber: case P_WordNumber: case P_FwPosInSentence: case P_BwPosInSentence:
+-        case P_ToBIFinalBoundaryTone: return NUL(v);
++        case P_ToBIFinalBoundaryTone: case P_PrimaryAccentPosition:
++        case P_ItmPhraseNumOfItnPhrase: case P_SyllNumOfItnPhrase: case P_WordNumOfItnPhrase: return NUL(v);
+         }
+         return -1;
+     }
+@@ -306,9 +409,68 @@
+         if (s->last_ip < 0) return -1;
+         return INT(v, nonbreak_phrases_between(s, i, s->ip[s->last_ip].ph1));
+     case P_ToBIFinalBoundaryTone: return ENU(v, z2_is_rw(&s->w[p->w1]) ? s->w[p->w1].tone : 0);
++    case P_PrimaryAccentPosition: {
++        int w, k, pos = 0;
++        for (w = p->w0; w <= p->w1; w++) {
++            if (!z2_has_syl_pron(&s->w[w])) continue;
++            for (k = 0; k < s->w[w].ns; k++) {
++                pos++;
++                if (syl_stress(s, s->w[w].s0 + k) == 1) return INT(v, pos);
++            }
++        }
++        return INT(v, 0);
+     }
++    case P_ItmPhraseNumOfItnPhrase:
++        if (p->ip < 0) return NUL(v);
++        return INT(v, nonbreak_phrases_between(s, s->ip[p->ip].ph0, s->ip[p->ip].ph1));
++    case P_SyllNumOfItnPhrase: {
++        int k, n = 0;
++        if (p->ip < 0) return NUL(v);
++        for (k = s->ip[p->ip].ph0; k <= s->ip[p->ip].ph1; k++) n += phrase_syls(s, k);
++        return INT(v, n);
++    }
++    case P_WordNumOfItnPhrase:
++        if (p->ip < 0) return NUL(v);
++        return INT(v, rw_between(s, s->ph[s->ip[p->ip].ph0].w0, s->ph[s->ip[p->ip].ph1].w1));
++    }
+     return -1;
+ }
++static int get_pw(const Z2Sent *s, int i, int prop, zf2_value *v)
++{
++    const Z2PW *p = &s->pw[i];
++    if (node_skip(s, L_PW, i)) return NUL(v);
++    switch (prop) {
++    case P_SyllableNumber: {
++        int k, n = 0;
++        for (k = p->w0; k <= p->w1; k++) if (z2_is_rw(&s->w[k])) n += s->w[k].ns;
++        return INT(v, n);
++    }
++    case P_WordNumber: return INT(v, rw_between(s, p->w0, p->w1));
++    case P_FwPosInPhrase: {
++        int k, n = 0;
++        if (p->ph < 0) return NUL(v);
++        for (k = s->ph[p->ph].pw0; k <= i; k++) if (!node_skip(s, L_PW, k)) n++;
++        return INT(v, n);
++    }
++    case P_BwPosInPhrase: {
++        int k, n = 0;
++        if (p->ph < 0) return NUL(v);
++        for (k = i; k <= s->ph[p->ph].pw1; k++) if (!node_skip(s, L_PW, k)) n++;
++        return INT(v, n);
++    }
++    case P_FwPosInSentence: {
++        int k, n = 0;
++        for (k = 0; k <= i; k++) if (!node_skip(s, L_PW, k)) n++;
++        return INT(v, n);
++    }
++    case P_BwPosInSentence: {
++        int k, n = 0;
++        for (k = i; k < s->npw; k++) if (!node_skip(s, L_PW, k)) n++;
++        return INT(v, n);
++    }
++    }
++    return -1;
++}
+ static int get_sent(const Z2Sent *s, int prop, zf2_value *v)
+ {
+     int k, n = 0;
+@@ -333,12 +495,23 @@
+     case L_PHONE: return get_phone(s, x.i, prop, v);
+     case L_SYL: return get_syl(s, x.i, prop, v);
+     case L_WORD: return get_word(s, x.i, prop, v);
++    case L_PW: return get_pw(s, x.i, prop, v);
+     case L_PHRASE: return get_phrase(s, x.i, prop, v);
      case L_SENT: return get_sent(s, prop, v);
      }
      return -1;
-+}
-+
+ }
+ 
 +/* the engine matches path tokens case-insensitively (Eva's NNM spells them in lower case) */
 +static int z2_icmp(const char *a, const char *b)
 +{
@@ -2606,10 +3280,12 @@
 +        if (x != y) return x - y;
 +    }
 +    return *a - *b;
- }
- 
++}
++
  typedef struct { int nstep; int lv[16], dir[16], skip[16]; int prop; } Path;
-@@ -355,11 +365,11 @@
+ static int parse_path(const char *path, Path *p)
+ {
+@@ -355,11 +528,11 @@
          tok[n] = 0;
          if (!e) {
              for (k = 0; k < (int)(sizeof PROP / sizeof PROP[0]); k++)
@@ -2625,7 +3301,7 @@
          p->dir[p->nstep] = LOC[k].dir;
 --- a/src/zf2_int.h
 +++ b/Engine/onecore/zf2_int.h
-@@ -14,8 +14,20 @@
+@@ -14,8 +14,21 @@
  #define Z2_MAXPH 48
  extern const char *const z2_phone_name[Z2_MAXPH];
  extern const uint32_t z2_phone_flags[Z2_MAXPH];
@@ -2634,20 +3310,21 @@
 +/* ClassicVoices patch: the phone set is per voice (zf2_voice.ps).  Default: the built-in en-US table above; zira_tts
 + * replaces it with the language data's own (zf2_voice_set_phoneset), which for MSTTSLocEnUS.dat is identical.
 + * en-GB (MSTTSLocEnGB.dat) has 49 phones, no -SP-, and its stress / tone marks are ids 4 / 5 instead of 5 / 6. */
-+#define Z2_PS_MAX 64
++#define Z2_PS_MAX 128
 +typedef struct {
 +    char name[Z2_PS_MAX][24];   /* "" = no phone with that id */
 +    uint32_t flags[Z2_PS_MAX];
 +    int sil;                    /* id of -SIL- (3 in both) */
 +    int st1;                    /* id of the stress mark '1' */
 +    int sp;                     /* id of -SP-, -1 if the set has none */
++    int t1;                     /* id of first tone mark 'T1' (flag 0x80000000), -1 if none */
 +} z2_phoneset;
 +int z2_phone_id(const z2_phoneset *ps, const char *name, int len);       /* -1 unknown */
 +
  /* pause classes (index into the SilenceLength table 0x180170f00) */
  enum { Z2_PC_WORD, Z2_PC_INTERM, Z2_PC_PUNCINTERM, Z2_PC_NONPUNCIP, Z2_PC_PARALIP, Z2_PC_PARALLISTIP, Z2_PC_IP, Z2_PC_SENT };
  
-@@ -26,11 +38,17 @@
+@@ -26,11 +39,17 @@
      int ratio_ne;           /* SilenceLength.RatioNameEntities (100)   = settings+0x30 */
      int punc_interm_raw;    /* SilenceLength.PuncIntermPhraseBoundary as read (10000 = "not configured") */
      int short_pause;        /* ShortPause.Enable -> phone set SP id (4) or -1 */
@@ -2667,7 +3344,33 @@
  /* ---- the tree ---- */
 --- a/src/zf2_main.c
 +++ b/Engine/onecore/zf2_main.c
-@@ -96,7 +96,18 @@
+@@ -79,6 +79,10 @@
+     if (!v) return NULL;
+     snprintf(path, sizeof path, "%s.INI", voicepath ? voicepath : "");
+     f = fopen(path, "rb");
++    if (!f) {
++        snprintf(path, sizeof path, "%s.ini", voicepath ? voicepath : "");
++        f = fopen(path, "rb");
++    }
+     if (f) {
+         long n;
+         fseek(f, 0, SEEK_END);
+@@ -88,6 +92,14 @@
+         n = (long)fread(ini, 1, (size_t)n, f);
+         ini[n] = 0;
+         fclose(f);
++        if (n >= 2 && (unsigned char)ini[0] == 0xff && (unsigned char)ini[1] == 0xfe) {
++            long i, j = 0;
++            for (i = 2; i + 1 < n; i += 2) {
++                unsigned c = (unsigned char)ini[i] | ((unsigned char)ini[i + 1] << 8);
++                if (c && c < 128) ini[j++] = (char)c;
++            }
++            ini[j] = 0;
++        }
+     }
+     for (k = 0; k < 8; k++) v->sil[k] = ini_int(ini, "SilenceLength", silkey[k], sildef[k]);
+     v->punc_interm_raw = v->sil[Z2_PC_PUNCINTERM];
+@@ -96,7 +108,19 @@
      if (v->speak_start < 5) v->speak_start = 5;
      if (v->speak_end < 5) v->speak_end = 5;
      v->ratio_ne = ini_int(ini, "SilenceLength", "RatioNameEntities", 100);
@@ -2681,13 +3384,14 @@
 +        v->ps.sil = Z2_PH_SIL;
 +        v->ps.st1 = Z2_PH_ST1;
 +        v->ps.sp = Z2_PH_SP;
++        v->ps.t1 = -1;
 +    }
 +    v->short_pause_on = ini_bool(ini, "ShortPause", "Enable", 0);
 +    v->short_pause = v->short_pause_on ? v->ps.sp : -1;
      v->no_pause = ini_int(ini, "MSTTS", "NoPause", 0);
      v->normal_factor = ini_int(ini, "VoiceSetting", "MSTTS_SpeakRate_NormalFactor", 100);
      v->phoneme_events_native = ini_int(ini, "VoiceSetting", "TtsPhonemeEvents", 0);
-@@ -113,7 +124,41 @@
+@@ -113,7 +137,44 @@
  /* ---- conversion ---- */
  static int zlen(const zf_char *s) { int n = 0; if (s) while (s[n]) n++; return n; }
  
@@ -2703,7 +3407,7 @@
 +    n = (uint32_t)res[4] | (uint32_t)res[5] << 8 | (uint32_t)res[6] << 16 | (uint32_t)res[7] << 24;
 +    if (rs < 52 || n == 0 || n > Z2_PS_MAX || 8 + (size_t)rs * n > size) return -1;
 +    memset(&ps, 0, sizeof ps);
-+    ps.sil = ps.st1 = ps.sp = -1;
++    ps.sil = ps.st1 = ps.sp = ps.t1 = -1;
 +    for (k = 0; k < n; k++) {
 +        const uint8_t *r = res + 8 + (size_t)rs * k;
 +        unsigned id = (unsigned)r[0] | (unsigned)r[1] << 8;
@@ -2719,8 +3423,11 @@
 +        if (!strcmp(ps.name[id], "-SIL-")) ps.sil = (int)id;
 +        else if (!strcmp(ps.name[id], "1")) ps.st1 = (int)id;
 +        else if (!strcmp(ps.name[id], "-SP-")) ps.sp = (int)id;
++        if (ps.t1 < 0 && (ps.flags[id] & 0x80000000u)) ps.t1 = (int)id;
++        if (ps.st1 < 0 && (ps.flags[id] & (0x10000000u | 0x20000000u))) ps.st1 = (int)id;
 +    }
-+    if (ps.sil < 0 || ps.st1 < 0) return -1;
++    if (ps.sil < 0) return -1;
++    if (ps.st1 < 0) ps.st1 = 0;
 +    v->ps = ps;
 +    v->short_pause = v->short_pause_on ? v->ps.sp : -1;
 +    return 0;
@@ -2730,7 +3437,7 @@
  {
      memset(d, 0, sizeof *d);
      d->type = w->type;
-@@ -168,7 +213,7 @@
+@@ -168,7 +229,7 @@
              while (k < n && w->pron[k] == ' ') k++;
              while (k < n && w->pron[k] != ' ' && j < 15) nm[j++] = (char)w->pron[k++];
              if (!j) break;
@@ -2739,7 +3446,7 @@
              if (id > 0) d->pron[m++] = (uint16_t)id;
          }
          d->npron = m;
-@@ -196,7 +241,7 @@
+@@ -196,7 +257,7 @@
          for (f = 0; f < s->nfrag; f++)
              if (!memcmp(&s->frag[f], &in->words[i].fs, sizeof(zf_fragstate))) break;
          if (f == s->nfrag) s->frag[s->nfrag++] = in->words[i].fs;
@@ -2748,7 +3455,7 @@
      }
      s->nquotes = in->nquotes;
      if (in->nquotes) {
-@@ -298,3 +343,10 @@
+@@ -298,3 +359,10 @@
      for (i = 0; i < s->nph; i++) fprintf(f, "PH %d %d %d par=%d\n", i, s->ph[i].w0, s->ph[i].w1, s->ph[i].ip);
      for (i = 0; i < s->nip; i++) fprintf(f, "IP %d %d %d\n", i, s->ip[i].ph0, s->ip[i].ph1);
  }
@@ -2840,6 +3547,21 @@
  }
  
  /* FUN_18001fb2c: the single SIL/SP syllable of a break token */
+--- a/src/zf2.h
++++ b/Engine/onecore/zf2.h
+@@ -30,6 +30,12 @@
+  * Returns NULL on failure. */
+ zf2_voice *zf2_voice_load(const char *voicepath);
+ void zf2_voice_free(zf2_voice *v);
++/* Attach statistical prosody model runners (Eva); fn(ctx, zf2_sent*, stage 1 breaks / 2 tones / 3 accents). */
++void zf2_voice_set_prosody_hook(zf2_voice *v, void (*fn)(void *ctx, void *sent, int stage), void *ctx);
++/* ClassicVoices patch: take the phone set (ids, names, flags) from the language data's resource 29a5584b/153f1b64
++ * instead of the built-in en-US one (identical to MSTTSLocEnUS.dat's).  Returns 0, or -1 (unchanged) if the
++ * resource is missing or malformed. */
++int zf2_voice_set_phoneset(zf2_voice *v, const uint8_t *res, size_t size);
+ 
+ /* ---- SAPI events produced for one sentence (audio offsets are filled by the backend from durations) ---- */
+ enum { ZF2_EV_WORD = 5, ZF2_EV_PHONEME = 6, ZF2_EV_SENTENCE = 7, ZF2_EV_VISEME = 8, ZF2_EV_BOOKMARK = 4 };
 --- a/src/zira_tts.c
 +++ b/Engine/onecore/zira_tts.c
 @@ -10,7 +10,9 @@
@@ -2865,7 +3587,7 @@
  };
  
  static int stricmp_ascii(const char *a, const char *b)
-@@ -45,32 +49,89 @@
+@@ -45,32 +49,283 @@
  
  const char *zira_tts_voice(const zira_tts *t) { return t ? t->voice : NULL; }
  
@@ -2874,33 +3596,223 @@
 + * next to the en-US files in the same folder (no file names clash).  The locale decides the data file names
 + * (M<lcid><Voice>, MSTTSLoc<xx>.dat, the domain .dat files: zf1_open_lcid) and the phone set of the back half
 + * (read from the language data: zf2_voice_set_phoneset). */
-+static const struct { const char *name; int lcid; int male; } VOICES[] = {
-+    {"David", 1033, 1}, {"Zira", 1033, 0}, {"Mark", 1033, 1},
-+    {"Hazel", 2057, 0}, {"George", 2057, 1}, {"Susan", 2057, 0},
-+    {"Eva", 1033, 0},    /* ClassicVoices addition: Microsoft Eva (eva_voice.c) */
-+    {"Sarah", 2057, 0},   /* ClassicVoices addition: Microsoft Sarah, the en-GB neural voice (eva_voice.c) */
-+    /* ClassicVoices addition (2026-09-29): the other English OneCore voices, from the Windows 11 Languages and Optional
-+     * Features image: en-AU Catherine / James, en-CA Linda / Richard (en-IN Heera / Ravi and en-IE Sean need multi-band
-+     * excitation and larger LSF models the reconstruction does not have) */
-+    {"Catherine", 3081, 0}, {"James", 3081, 1}, {"Linda", 4105, 0}, {"Richard", 4105, 1},
-+    {"Matilda", 3081, 0}};  /* ClassicVoices addition (2026-09-30): Microsoft Matilda, the en-AU neural voice (eva_voice.c) */
++typedef struct {
++    const char *name;
++    const char *prefix;
++    const char *locale;
++    const char *dat;
++    int lcid;
++    int male;
++    int neural;
++} zira_voice_def;
++
++static const zira_voice_def VOICES[] = {
++    /* Original 13 English voices first (David at index 0) */
++    {"David",      "M1033David",     "en-US", "MSTTSLocEnUS.dat", 1033,  1, 0},
++    {"Zira",       "M1033Zira",      "en-US", "MSTTSLocEnUS.dat", 1033,  0, 0},
++    {"Mark",       "M1033Mark",      "en-US", "MSTTSLocEnUS.dat", 1033,  1, 0},
++    {"Hazel",      "M2057Hazel",     "en-GB", "MSTTSLocEnGB.dat", 2057,  0, 0},
++    {"George",     "M2057George",    "en-GB", "MSTTSLocEnGB.dat", 2057,  1, 0},
++    {"Susan",      "M2057Susan",     "en-GB", "MSTTSLocEnGB.dat", 2057,  0, 0},
++    {"Eva",        "M1033Eva",       "en-US", "MSTTSLocEnUS.dat", 1033,  0, 1},
++    {"Sarah",      "M2057Sarah",     "en-GB", "MSTTSLocEnGB.dat", 2057,  0, 1},
++    {"Catherine",  "M3081Catherine", "en-AU", "MSTTSLocEnAU.dat", 3081,  0, 0},
++    {"James",      "M3081James",     "en-AU", "MSTTSLocEnAU.dat", 3081,  1, 0},
++    {"Linda",      "M4105Linda",     "en-CA", "MSTTSLocEnCA.dat", 4105,  0, 0},
++    {"Richard",    "M4105Richard",   "en-CA", "MSTTSLocEnCA.dat", 4105,  1, 0},
++    {"Matilda",    "M3081Matilda",   "en-AU", "MSTTSLocEnAU.dat", 3081,  0, 1},
++    /* Additional English voices (en-CA, en-IE, en-IN) */
++    {"EvaCA",      "M4105Eva",       "en-CA", "MSTTSLocEnCA.dat", 4105,  0, 0},
++    {"Sean",       "M6153Sean",      "en-IE", "MSTTSLocEnIE.dat", 6153,  1, 0},
++    {"Heera",      "M16393Heera",    "en-IN", "MSTTSLocEnIN.dat", 16393, 0, 0},
++    {"Koyal",      "M16393Koyal",    "en-IN", "MSTTSLocEnIN.dat", 16393, 0, 0},
++    {"Ravi",       "M16393Ravi",     "en-IN", "MSTTSLocEnIN.dat", 16393, 1, 0},
++    /* ar-SA, ar-EG, bg-BG, ca-ES, cs-CZ, da-DK */
++    {"Naayf",      "M1025Naayf",     "ar-SA", "MSTTSLocArSA.dat", 1025,  1, 0},
++    {"Hoda",       "M3073Hoda",      "ar-EG", "MSTTSLocArEG.dat", 3073,  0, 0},
++    {"Ivan",       "M1026Ivan",      "bg-BG", "MSTTSLocBgBG.dat", 1026,  1, 0},
++    {"Herena",     "M1027Herena",    "ca-ES", "MSTTSLocCaES.dat", 1027,  0, 0},
++    {"Jakub",      "M1029Jakub",     "cs-CZ", "MSTTSLocCsCZ.dat", 1029,  1, 0},
++    {"Helle",      "M1030Helle",     "da-DK", "MSTTSLocDaDK.dat", 1030,  0, 0},
++    /* de-AT, de-CH, de-DE */
++    {"Michael",    "M3079Michael",   "de-AT", "MSTTSLocDeAT.dat", 3079,  1, 0},
++    {"Karsten",    "M2055Karsten",   "de-CH", "MSTTSLocDeCH.dat", 2055,  1, 0},
++    {"Hedda",      "M1031Hedda",     "de-DE", "MSTTSLocDeDE.dat", 1031,  0, 0},
++    {"Katja",      "M1031Katja",     "de-DE", "MSTTSLocDeDE.dat", 1031,  0, 0},
++    {"KatjaV2",    "M1031KatjaV2",   "de-DE", "MSTTSLocDeDE.dat", 1031,  0, 1},
++    {"Stefan",     "M1031Stefan",    "de-DE", "MSTTSLocDeDE.dat", 1031,  1, 0},
++    /* el-GR */
++    {"Stefanos",   "M1032Stefanos",  "el-GR", "MSTTSLocElGR.dat", 1032,  1, 0},
++    /* es-ES, es-MX, fi-FI */
++    {"AnaES",      "M3082Ana",       "es-ES", "MSTTSLocEsES.dat", 3082,  0, 0},
++    {"Helena",     "M3082Helena",    "es-ES", "MSTTSLocEsES.dat", 3082,  0, 0},
++    {"Laura",      "M3082Laura",     "es-ES", "MSTTSLocEsES.dat", 3082,  0, 0},
++    {"Pablo",      "M3082Pablo",     "es-ES", "MSTTSLocEsES.dat", 3082,  1, 0},
++    {"Mila",       "M2058Mila",      "es-MX", "MSTTSLocEsMX.dat", 2058,  0, 1},
++    {"Raul",       "M2058Raul",      "es-MX", "MSTTSLocEsMX.dat", 2058,  1, 0},
++    {"Sabina",     "M2058Sabina",    "es-MX", "MSTTSLocEsMX.dat", 2058,  0, 0},
++    {"Heidi",      "M1035Heidi",     "fi-FI", "MSTTSLocFiFI.dat", 1035,  0, 0},
++    /* fr-CA, fr-FR, fr-CH */
++    {"Caroline",   "M3084Caroline",  "fr-CA", "MSTTSLocFrCA.dat", 3084,  0, 0},
++    {"Claude",     "M3084Claude",    "fr-CA", "MSTTSLocFrCA.dat", 3084,  1, 0},
++    {"NathalieCA", "M3084Nathalie",  "fr-CA", "MSTTSLocFrCA.dat", 3084,  0, 0},
++    {"Hortense",   "M1036Hortense",  "fr-FR", "MSTTSLocFrFR.dat", 1036,  0, 0},
++    {"Julie",      "M1036Julie",     "fr-FR", "MSTTSLocFrFR.dat", 1036,  0, 0},
++    {"Nathalie",   "M1036Nathalie",  "fr-FR", "MSTTSLocFrFR.dat", 1036,  0, 1},
++    {"Paul",       "M1036Paul",      "fr-FR", "MSTTSLocFrFR.dat", 1036,  1, 0},
++    {"Guillaume",  "M4108Guillaume", "fr-CH", "MSTTSLocFrCH.dat", 4108,  1, 0},
++    /* he-IL, hi-IN, hr-HR, hu-HU, id-ID */
++    {"Asaf",       "M1037Asaf",      "he-IL", "MSTTSLocHeIL.dat", 1037,  1, 0},
++    {"Hemant",     "M1081Hemant",    "hi-IN", "MSTTSLocHiIN.dat", 1081,  1, 0},
++    {"Kalpana",    "M1081Kalpana",   "hi-IN", "MSTTSLocHiIN.dat", 1081,  0, 0},
++    {"Matej",      "M1050Matej",     "hr-HR", "MSTTSLocHrHR.dat", 1050,  1, 0},
++    {"Szabolcs",   "M1038Szabolcs",  "hu-HU", "MSTTSLocHuHU.dat", 1038,  1, 0},
++    {"Andika",     "M1057Andika",    "id-ID", "MSTTSLocIdID.dat", 1057,  1, 0},
++    /* it-IT */
++    {"Cosimo",     "M1040Cosimo",    "it-IT", "MSTTSLocItIT.dat", 1040,  1, 0},
++    {"Elsa",       "M1040Elsa",      "it-IT", "MSTTSLocItIT.dat", 1040,  0, 0},
++    {"ElsaV2",     "M1040ElsaV2",    "it-IT", "MSTTSLocItIT.dat", 1040,  0, 1},
++    /* ja-JP, ko-KR, ms-MY, nb-NO, nl-BE, nl-NL */
++    {"Ayumi",      "M1041Ayumi",     "ja-JP", "MSTTSLocJaJP.dat", 1041,  0, 0},
++    {"Haruka",     "M1041Haruka",    "ja-JP", "MSTTSLocJaJP.dat", 1041,  0, 0},
++    {"Ichiro",     "M1041Ichiro",    "ja-JP", "MSTTSLocJaJP.dat", 1041,  1, 0},
++    {"Sayaka",     "M1041Sayaka",    "ja-JP", "MSTTSLocJaJP.dat", 1041,  0, 0},
++    {"Heami",      "M1042Heami",     "ko-KR", "MSTTSLocKoKR.dat", 1042,  0, 0},
++    {"Rizwan",     "M1086Rizwan",    "ms-MY", "MSTTSLocMsMY.dat", 1086,  1, 0},
++    {"Jon",        "M1044Jon",       "nb-NO", "MSTTSLocNbNO.dat", 1044,  1, 0},
++    {"Bart",       "M2067Bart",      "nl-BE", "MSTTSLocNlBE.dat", 2067,  1, 0},
++    {"Frank",      "M1043Frank",     "nl-NL", "MSTTSLocNlNL.dat", 1043,  1, 0},
++    /* pl-PL, pt-BR, pt-PT, ro-RO, ru-RU, sk-SK, sl-SI, sv-SE */
++    {"Adam",       "M1045Adam",      "pl-PL", "MSTTSLocPlPL.dat", 1045,  1, 0},
++    {"Paulina",    "M1045Paulina",   "pl-PL", "MSTTSLocPlPL.dat", 1045,  0, 0},
++    {"AnaBR",      "M1046Ana",       "pt-BR", "MSTTSLocPtBR.dat", 1046,  0, 0},
++    {"Daniel",     "M1046Daniel",    "pt-BR", "MSTTSLocPtBR.dat", 1046,  1, 0},
++    {"Maria",      "M1046Maria",     "pt-BR", "MSTTSLocPtBR.dat", 1046,  0, 0},
++    {"Helia",      "M2070Helia",     "pt-PT", "MSTTSLocPtPT.dat", 2070,  0, 0},
++    {"Andrei",     "M1048Andrei",    "ro-RO", "MSTTSLocRoRO.dat", 1048,  1, 0},
++    {"Irina",      "M1049Irina",     "ru-RU", "MSTTSLocRuRU.dat", 1049,  0, 0},
++    {"Pavel",      "M1049Pavel",     "ru-RU", "MSTTSLocRuRU.dat", 1049,  1, 0},
++    {"Filip",      "M1051Filip",     "sk-SK", "MSTTSLocSkSK.dat", 1051,  1, 0},
++    {"Lado",       "M1060Lado",      "sl-SI", "MSTTSLocSlSI.dat", 1060,  1, 0},
++    {"Bengt",      "M1053Bengt",     "sv-SE", "MSTTSLocSvSE.dat", 1053,  1, 0},
++    /* ta-IN, th-TH, tr-TR, vi-VN, zh-CN, zh-HK */
++    {"Valluvar",   "M1097Valluvar",  "ta-IN", "MSTTSLocTaIN.dat", 1097,  1, 0},
++    {"Pattara",    "M1054Pattara",   "th-TH", "MSTTSLocThTH.dat", 1054,  1, 0},
++    {"Tolga",      "M1055Tolga",     "tr-TR", "MSTTSLocTrTR.dat", 1055,  1, 0},
++    {"An",         "M1066An",        "vi-VN", "MSTTSLocViVN.dat", 1066,  1, 0},
++    {"Hongyu",     "M2052Hongyu",    "zh-CN", "MSTTSLocZhCN.dat", 2052,  0, 0},
++    {"Huihui",     "M2052Huihui",    "zh-CN", "MSTTSLocZhCN.dat", 2052,  0, 0},
++    {"Kangkang",   "M2052Kangkang",  "zh-CN", "MSTTSLocZhCN.dat", 2052,  1, 0},
++    {"Yaoyao",     "M2052Yaoyao",    "zh-CN", "MSTTSLocZhCN.dat", 2052,  0, 0},
++    {"Danny",      "M3076Danny",     "zh-HK", "MSTTSLocZhHK.dat", 3076,  1, 0},
++    {"Tracy",      "M3076Tracy",     "zh-HK", "MSTTSLocZhHK.dat", 3076,  0, 0}
++};
++
++static const zira_voice_def *find_voice(const char *voice)
++{
++    size_t i;
++    if (!voice || !*voice) return NULL;
++    for (i = 0; i < sizeof VOICES / sizeof *VOICES; i++)
++        if (!stricmp_ascii(voice, VOICES[i].name) || !stricmp_ascii(voice, VOICES[i].prefix))
++            return &VOICES[i];
++    return NULL;
++}
 +
 +int zira_tts_voice_lcid(const char *voice)
 +{
-+    size_t i;
-+    for (i = 0; i < sizeof VOICES / sizeof *VOICES; i++)
-+        if (voice && !stricmp_ascii(voice, VOICES[i].name)) return VOICES[i].lcid;
++    const zira_voice_def *vd = find_voice(voice);
++    return vd ? vd->lcid : 0;
++}
++
++static int file_exists_z(const char *path)
++{
++    FILE *f = fopen(path, "rb");
++    if (f) { fclose(f); return 1; }
 +    return 0;
 +}
 +
-+static const char *lcid_tag(int lcid)
++static int ext_exists_z(const char *vp, const char *UPPER, const char *lower)
 +{
-+    switch (lcid) {
-+    case 2057: return "EnGB";
-+    case 3081: return "EnAU";
-+    case 4105: return "EnCA";
-+    default: return "EnUS";
++    char p[1200];
++    snprintf(p, sizeof p, "%s.%s", vp, UPPER);
++    if (file_exists_z(p)) return 1;
++    snprintf(p, sizeof p, "%s.%s", vp, lower);
++    return file_exists_z(p);
++}
++
++/* Resolves `<dir>/<prefix>` (or `<dir>/<locale>/<prefix>`) on case-sensitive filesystems, accepting both canonical
++ * `M3079Michael` and Windows' raw `m3079Michael` as well as `.APM` / `.apm`. Returns 1 when the APM exists. */
++static int resolve_voice_prefix(char *out, size_t cap, const char *dir, const zira_voice_def *vd)
++{
++    char alt_prefix[32], low_loc[16];
++    const char *pfxs[2];
++    size_t np = 1, i;
++    pfxs[0] = vd->prefix;
++    if (vd->prefix[0] == 'M') {
++        snprintf(alt_prefix, sizeof alt_prefix, "m%s", vd->prefix + 1);
++        pfxs[np++] = alt_prefix;
 +    }
++    for (i = 0; vd->locale[i] && i + 1 < sizeof low_loc; i++)
++        low_loc[i] = (char)(vd->locale[i] >= 'A' && vd->locale[i] <= 'Z' ? vd->locale[i] + 32 : vd->locale[i]);
++    low_loc[i] = 0;
++    for (i = 0; i < np; i++) {
++        snprintf(out, cap, "%s/%s", dir, pfxs[i]);
++        if (ext_exists_z(out, "APM", "apm")) return 1;
++    }
++    for (i = 0; i < np; i++) {
++        snprintf(out, cap, "%s/%s/%s", dir, vd->locale, pfxs[i]);
++        if (ext_exists_z(out, "APM", "apm")) return 1;
++        snprintf(out, cap, "%s/%s/%s", dir, low_loc, pfxs[i]);
++        if (ext_exists_z(out, "APM", "apm")) return 1;
++    }
++    snprintf(out, cap, "%s/%s", dir, vd->prefix);
++    return 0;
++}
++
++/* Resolves `<dir>/MSTTSLoc<xx>.dat` (or `.DAT`, flat or under `<locale>/`). Returns 1 when found. */
++static int resolve_dat_path(char *out, size_t cap, const char *dir, const zira_voice_def *vd)
++{
++    char upper_dat[32], low_loc[16];
++    const char *dats[2];
++    size_t n = strlen(vd->dat), nd = 1, i;
++    dats[0] = vd->dat;
++    if (n > 4 && !strcmp(vd->dat + n - 4, ".dat")) {
++        snprintf(upper_dat, sizeof upper_dat, "%.*s.DAT", (int)(n - 4), vd->dat);
++        dats[nd++] = upper_dat;
++    }
++    for (i = 0; vd->locale[i] && i + 1 < sizeof low_loc; i++)
++        low_loc[i] = (char)(vd->locale[i] >= 'A' && vd->locale[i] <= 'Z' ? vd->locale[i] + 32 : vd->locale[i]);
++    low_loc[i] = 0;
++    for (i = 0; i < nd; i++) {
++        snprintf(out, cap, "%s/%s", dir, dats[i]);
++        if (file_exists_z(out)) return 1;
++    }
++    for (i = 0; i < nd; i++) {
++        snprintf(out, cap, "%s/%s/%s", dir, vd->locale, dats[i]);
++        if (file_exists_z(out)) return 1;
++        snprintf(out, cap, "%s/%s/%s", dir, low_loc, dats[i]);
++        if (file_exists_z(out)) return 1;
++    }
++    snprintf(out, cap, "%s/%s", dir, vd->dat);
++    return 0;
++}
++
++int zira_tts_voice_has_data(const char *data_dir, const char *voice)
++{
++    char vpath[1200], dat[1200];
++    const zira_voice_def *vd;
++    if (!data_dir || !*data_dir || !voice || !*voice) return 0;
++    vd = find_voice(voice);
++    if (!vd) return 0;
++    if (!resolve_voice_prefix(vpath, sizeof vpath, data_dir, vd)) return 0;
++    if (!ext_exists_z(vpath, "INI", "ini")) return 0;
++    if (!resolve_dat_path(dat, sizeof dat, data_dir, vd)) return 0;
++    if (vd->neural) {
++        if (!ext_exists_z(vpath, "NNM", "nnm") || !ext_exists_z(vpath, "HEQ", "heq") ||
++            !ext_exists_z(vpath, "TDAT", "tdat"))
++            return 0;
++    }
++    return 1;
 +}
 +
  zira_tts *zira_tts_open(const char *data_dir, const char *voice, char *err, size_t errlen)
@@ -2909,29 +3821,35 @@
      char vpath[1200], dat[1200];
 -    static const char *const known[3] = {"David", "Zira", "Mark"};
 -    int i;
-+    size_t i, n;
++    size_t n;
 +    const uint8_t *ps;
++    const zira_voice_def *vd;
      if (!t) {
          if (err) snprintf(err, errlen, "out of memory");
          return NULL;
      }
      snprintf(t->dir, sizeof t->dir, "%s", data_dir && *data_dir ? data_dir : DEF_DIR);
-     snprintf(t->voice, sizeof t->voice, "%s", voice && *voice ? voice : "David");
+-    snprintf(t->voice, sizeof t->voice, "%s", voice && *voice ? voice : "David");
 -    for (i = 0; i < 3; i++)
 -        if (!stricmp_ascii(t->voice, known[i])) snprintf(t->voice, sizeof t->voice, "%s", known[i]);
-+    t->lcid = 1033;
-     t->male = stricmp_ascii(t->voice, "Zira") != 0;
-+    for (i = 0; i < sizeof VOICES / sizeof *VOICES; i++)
-+        if (!stricmp_ascii(t->voice, VOICES[i].name)) {
-+            snprintf(t->voice, sizeof t->voice, "%s", VOICES[i].name);
-+            t->lcid = VOICES[i].lcid;
-+            t->male = VOICES[i].male;
-+        }
+-    t->male = stricmp_ascii(t->voice, "Zira") != 0;
++    vd = (voice && *voice) ? find_voice(voice) : &VOICES[0];
++    if (vd) {
++        snprintf(t->voice, sizeof t->voice, "%s", vd->name);
++        t->lcid = vd->lcid;
++        t->male = vd->male;
++        resolve_voice_prefix(vpath, sizeof vpath, t->dir, vd);
++        resolve_dat_path(dat, sizeof dat, t->dir, vd);
++    } else {
++        snprintf(t->voice, sizeof t->voice, "%s", voice);
++        t->lcid = 1033;
++        t->male = stricmp_ascii(t->voice, "Zira") != 0;
++        snprintf(vpath, sizeof vpath, "%s/M%d%s", t->dir, t->lcid, t->voice);
++        snprintf(dat, sizeof dat, "%s/MSTTSLocEnUS.dat", t->dir);
++    }
      t->sapi.volume = 100;
 -    snprintf(vpath, sizeof vpath, "%s/M1033%s", t->dir, t->voice);
 -    snprintf(dat, sizeof dat, "%s/MSTTSLocEnUS.dat", t->dir);
-+    snprintf(vpath, sizeof vpath, "%s/M%d%s", t->dir, t->lcid, t->voice);
-+    snprintf(dat, sizeof dat, "%s/MSTTSLoc%s.dat", t->dir, lcid_tag(t->lcid));
      t->vb = zb_voice_load(vpath, err, (int)errlen);
      if (!t->vb) goto fail;
      t->vf = zf2_voice_load(vpath);
@@ -2947,7 +3865,7 @@
 +        if (err) snprintf(err, errlen, "bad phone set in %s", dat);
 +        goto fail;
 +    }
-+    if (!stricmp_ascii(t->voice, "Eva") || !stricmp_ascii(t->voice, "Sarah") || !stricmp_ascii(t->voice, "Matilda")) {
++    if (vd && vd->neural) {
 +        /* ClassicVoices addition: the neural back end (+ Eva's prosody models) */
 +        char e2[256];
 +        t->eva = eva_model_open(vpath, t->lcid, t->vf, e2, sizeof e2);
@@ -2962,7 +3880,7 @@
      return t;
  fail:
      zira_tts_close(t);
-@@ -80,6 +141,7 @@
+@@ -80,6 +335,7 @@
  void zira_tts_close(zira_tts *t)
  {
      if (!t) return;
@@ -2970,7 +3888,7 @@
      if (t->e) zf1_close(t->e);
      if (t->vf) zf2_voice_free(t->vf);
      if (t->vb) zb_voice_free(t->vb);
-@@ -96,8 +158,23 @@
+@@ -96,8 +352,23 @@
      if (rate > 20) rate = 20;
      t->sapi.rate = rate > 10 ? 10 : rate;
      t->rate_ext = rate > 10 ? rate - 10 : 0;
@@ -2994,7 +3912,7 @@
  void zira_tts_set_volume(zira_tts *t, int volume) { t->sapi.volume = volume < 0 ? 0 : volume > 100 ? 100 : volume; }
  void zira_tts_set_pitch(zira_tts *t, int pitch) { t->pitch = pitch < -10 ? -10 : pitch > 10 ? 10 : pitch; }
  void zira_tts_cancel(zira_tts *t) { t->cancel = 1; }
-@@ -273,7 +350,21 @@
+@@ -273,7 +544,21 @@
          memset(&u, 0, sizeof u);
          memset(&ev, 0, sizeof ev);
          memset(&tr, 0, sizeof tr);
@@ -3017,7 +3935,7 @@
              apply_controls(t, &u);
              c->ev = &ev;
              c->tr = &tr;
-@@ -313,7 +404,8 @@
+@@ -313,7 +598,8 @@
      /* SAPI hands <lang langid="..."> ... </lang> to the language's default voice as a separate job, keeping the
         gender: a male voice switches to David, Zira (female) stays herself.  Same rule as zira_say.c. */
      while (*p && !rc && !t->cancel && !c.stopped) {
@@ -3027,7 +3945,7 @@
          int david = 0;
          if (tag == p) {
              char *gt = strchr(p, '>'), *close = gt ? strstr(gt, "</lang>") : NULL;
-@@ -333,6 +425,11 @@
+@@ -333,6 +619,11 @@
              snprintf(dp, sizeof dp, "%s/M1033David", t->dir);
              t->db = zb_voice_load(dp, err, sizeof err);
              t->df = zf2_voice_load(dp);
@@ -3039,7 +3957,7 @@
          }
          if (*piece) {
              ZbVoice *ub = david && t->db ? t->db : t->vb;
-@@ -355,3 +452,11 @@
+@@ -355,3 +646,11 @@
      }
      return rc;
  }
@@ -3053,7 +3971,7 @@
 +}
 --- a/src/zira_tts.h
 +++ b/Engine/onecore/zira_tts.h
-@@ -67,10 +67,14 @@
+@@ -67,10 +67,16 @@
                                 <bookmark mark="x"/>, <lang langid="..."> ...  Without this flag the text is
                                 spoken literally (SAPI's SPF_IS_NOT_XML). */
  
@@ -3064,12 +3982,14 @@
   * data_dir: NULL = C:/Windows/Speech_OneCore/Engines/TTS/en-US. */
  ZIRA_API zira_tts *zira_tts_open(const char *data_dir, const char *voice, char *err, size_t errlen);
  ZIRA_API void zira_tts_close(zira_tts *t);
-+/* ClassicVoices patch: the locale (LCID) of a voice name: 1033 en-US, 2057 en-GB, 3081 en-AU, 4105 en-CA, 0 unknown. */
++/* ClassicVoices patch: the locale (LCID) of a voice name: 1033 en-US, 2057 en-GB, 3081 en-AU, 4105 en-CA, ..., 0 unknown. */
 +ZIRA_API int zira_tts_voice_lcid(const char *voice);
++/* ClassicVoices patch: 1 if voice is known and its model + locale data files exist in data_dir, else 0. */
++ZIRA_API int zira_tts_voice_has_data(const char *data_dir, const char *voice);
  
  /* The voice this handle speaks with, and the data folder it was loaded from. */
  ZIRA_API const char *zira_tts_voice(const zira_tts *t);
-@@ -82,6 +86,9 @@
+@@ -82,6 +88,9 @@
   * volume: 0..100 (the engine's -25 dB range curve).
   * pitch: -10..10, added to the XML <pitch middle> of every phone and clamped there; +-10 = +-5 semitones. */
  ZIRA_API void zira_tts_set_rate(zira_tts *t, int rate);
@@ -3079,7 +3999,7 @@
  ZIRA_API void zira_tts_set_volume(zira_tts *t, int volume);
  ZIRA_API void zira_tts_set_pitch(zira_tts *t, int pitch);
  
-@@ -98,6 +105,10 @@
+@@ -98,6 +107,10 @@
  /* thread-safe: stop the current zira_tts_speak as soon as possible (within one audio chunk) */
  ZIRA_API void zira_tts_cancel(zira_tts *t);
  

@@ -33,12 +33,13 @@ project's patches applied (Engine/patches/). The upstream licence files are kept
    Patches:  Engine/patches/anna-engine.patch
 
 3. Engine/onecore: Microsoft OneCore engine (David, Zira, Mark, Hazel, George, Susan; with this project's additions also
-   Eva, Sarah, Matilda, Catherine, James, Linda, Richard), reconstructed in C
+   Eva, Sarah, Matilda, Catherine, James, Linda, Richard, and the additional English and multilingual Windows 10 / 11
+   OneCore and Cortana neural voices), reconstructed in C
    Upstream: https://github.com/KamiKitsune420/ms-david-zira-decomp
    Pinned:   3009a84894fdb37e1f808469cc97ab25006096e1
    Licence:  MIT, Copyright (c) 2026 KamiKitsune420 (Engine/onecore/LICENSE)
-   Patches:  Engine/patches/onecore-engine.patch (includes this project's additions: the neural back end used by Eva
-             and Sarah, eva_*.c / eva_*.h, and the en-GB locale support)
+   Patches:  Engine/patches/onecore-engine.patch (includes this project's additions: the neural back end used by Eva,
+             Sarah, Matilda, Katja V2, Elsa V2, Nathalie and Mila, eva_*.c / eva_*.h, and multi-locale support)
 
 4. Engine/opentv: OpenTV, the L&H / Centigram TruVoice engine decompiled to C
    Upstream: https://github.com/RetroBunn/tv-decomp
@@ -88,7 +89,7 @@ not covered by any licence of this project, and it will be removed on request by
 - Microsoft SAPI 4 engine msttssyn.dll and its voice files: Microsoft Corporation.
 - Microsoft Anna voice data: Microsoft Corporation.
 - Microsoft OneCore voices and language data (David, Zira, Mark, Hazel, George, Susan, Eva, Sarah, Matilda, Catherine,
-  James, Linda, Richard): Microsoft
+  James, Linda, Richard, and any additional Windows 10 / 11 OneCore language-pack voices): Microsoft
   Corporation.
 - Windows 11 natural voices (Jenny, Aria, Guy, Sonia, Ryan, Neerja, Prabhat), the key their models are encrypted
   with, and the

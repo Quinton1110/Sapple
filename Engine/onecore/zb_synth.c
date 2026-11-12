@@ -10,14 +10,26 @@ void zb_lsf_repair(float *lsf, int rows, int p);
 void zb_apply_sapi_volume(const ZbUtt *u, const int *dur, int nstate, int shift, int sitevol, short *pcm);
 int zb_synth_int(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn write, void *user, ZbTrace *trace);
 
+static void zb_ext_path(char *out, size_t cap, const char *vp, const char *UPPER, const char *lower)
+{
+    FILE *f;
+    snprintf(out, cap, "%s.%s", vp, UPPER);
+    f = fopen(out, "rb");
+    if (f) { fclose(f); return; }
+    snprintf(out, cap, "%s.%s", vp, lower);
+    f = fopen(out, "rb");
+    if (f) { fclose(f); return; }
+    snprintf(out, cap, "%s.%s", vp, UPPER);
+}
+
 ZbVoice *zb_voice_load(const char *voicepath, char *err, int errlen)
 {
     ZbVoice *v = (ZbVoice *)calloc(1, sizeof *v);
     char path[1024];
     if (!v) return NULL;
-    snprintf(path, sizeof path, "%s.APM", voicepath);
+    zb_ext_path(path, sizeof path, voicepath, "APM", "apm");
     if (zb_apm_load(v, path, err, errlen)) { zb_voice_free(v); return NULL; }
-    snprintf(path, sizeof path, "%s.INI", voicepath);
+    zb_ext_path(path, sizeof path, voicepath, "INI", "ini");
     if (zb_ini_load(v, path)) { snprintf(err, errlen, "cannot read %s", path); zb_voice_free(v); return NULL; }
     zb_vocoder_init(v);
     zb_srand(v, 0x406);
@@ -237,8 +249,9 @@ int zb_synth(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn write, 
     short *pcm = NULL, *wav = NULL;
     int *stretch = NULL;
     long nwav = 0;
-    const int D = 24;
+    int D;
     if (!v->m_lsf || !v->m_lf0) return -1;   /* duration-only APM (Eva) */
+    D = v->m_lsf->streamdim[0] / 3 - 1;
     if (v->isint) return zb_synth_int(v, u, sapi, write, user, trace);
     memset(&um, 0, sizeof um);
     if (lookup(v, u, &um)) goto done;
@@ -293,7 +306,7 @@ int zb_synth(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn write, 
     }
     /* vocoder */
     pcm = (short *)calloc((size_t)T * v->shift + 1, sizeof(short));
-    zb_vocoder_float(v, u, um.dur, ns, T, lf0, lsf, gain, stretch, pcm);
+    zb_vocoder_float_p(v, u, um.dur, ns, T, lf0, lsf, gain, stretch, pcm, D);
     nwav = zb_wave_sps(v, u, sapi, um.dur, ns, stretch, NULL, 0, pcm, &wav);   /* rate stage, voice + SAPI volume */
     zb_srand(v, 0x406);   /* end-of-utterance vocoder reset (FUN_18011024c) */
     rc = 0;

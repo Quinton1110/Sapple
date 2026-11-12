@@ -132,7 +132,7 @@ public final class ClassicVoicesProvider: AVSpeechSynthesisProviderAudioUnit {
 
     public override var speechVoices: [AVSpeechSynthesisProviderVoice] {
         get {
-            CLASSIC_VOICES.map { def in
+            VoiceCatalog.availableVoices.map { def in
                 let v = AVSpeechSynthesisProviderVoice(
                     name: def.display,
                     identifier: def.identifier,
