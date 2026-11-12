@@ -230,6 +230,14 @@ func runParse() {
     check(CLASSIC_VOICES.map(\.slug).prefix(oldSlugs.count).elementsEqual(oldSlugs)
           && CLASSIC_VOICES.dropFirst(oldSlugs.count).allSatisfy { $0.engine == .neural },
           "every earlier slug unchanged and in the same order (\(oldSlugs.count)), the neural voices after them")
+    if !NEURAL_VOICES.isEmpty {
+        check(NEURAL_VOICES.prefix(7).map(\.slug) == ["neural_jenny", "neural_aria", "neural_guy", "neural_sonia",
+                                                      "neural_ryan", "neural_neerja", "neural_prabhat"]
+              && name("neural_nanami") == "Nanami" && name("neural_katja") == "Katja (Natural)"
+              && name("neural_antonio") == "Antonio"
+              && VoiceCatalog.shortName(CLASSIC_VOICES.first { $0.slug == "neural_katja" }!) == "Katja",
+              "neural voices: original 7 first, multilingual voices added with Katja (Natural) disambiguated")
+    }
     print("     voices: \(CLASSIC_VOICES.count); neural: \(NEURAL_VOICES.map(\.display))")
 }
 
@@ -533,9 +541,10 @@ let neuralFixtures: [Fixture] = [
 
 func runNeural(_ outDir: String) {
     try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
-    guard !NEURAL_VOICES.isEmpty else { check(false, "no neural voices on this Mac"); return }
+    let voices = NEURAL_VOICES.filter { $0.language.hasPrefix("en-") && ClassicEngine.shared.isVoiceAvailable($0) }
+    guard !voices.isEmpty else { check(false, "no staged English neural voices on this Mac"); return }
     print("\nvoice   fixture        before: gaps ms (dur)                     after: gaps ms (dur)")
-    for v in NEURAL_VOICES {
+    for v in voices {
         let oldRate = v.language != "en-US" ? 10 * log(100.0 / 95.0) / log(3.0) : 0   // RateAdjustment 100 (en-GB / en-IN: 95)
         for f in neuralFixtures {
             var before: [Int16] = []

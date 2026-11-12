@@ -1,9 +1,11 @@
-/* ClassicVoices neural bridge: Jenny, Aria and Guy (en-US), Sonia and Ryan (en-GB), Neerja and Prabhat (en-IN) - the Windows 11 Narrator "natural"
- * voices, on Microsoft's own embedded (offline) Speech SDK engine, 1.33 (the three dylibs in NeuralSDK/, loaded at run
+/* ClassicVoices neural bridge: the Windows 11 Narrator "natural" voices - Jenny, Aria and Guy (en-US), Sonia and Ryan
+ * (en-GB), Neerja and Prabhat (en-IN), Nanami and Keita (ja-JP), Xiaoxiao and Yunxi (zh-CN), Katja and Conrad (de-DE),
+ * Elvira and Alvaro (es-ES), Dalia and Jorge (es-MX), Denise and Henri (fr-FR), SunHi and InJoon (ko-KR), Francisca and
+ * Antonio (pt-BR) - on Microsoft's own embedded (offline) Speech SDK engine, 1.33 (the three dylibs in NeuralSDK/, loaded at run
  * time with dlopen; nothing of the SDK is linked at build time) - behind the same shape as cv_bridge.h / cvo_bridge.h,
  * so Swift drives every engine alike:
- *   - the same text sanitizer (cv_sanitize_alloc), then the text XML-escaped inside SSML <prosody rate pitch> (markup in
- *     the text is spoken, never obeyed);
+ *   - text sanitizer (cv_sanitize_alloc for English locales, cv_sanitize_unicode_alloc for non-English locales), then the
+ *     text XML-escaped inside SSML <prosody rate pitch> (markup in the text is spoken, never obeyed);
  *   - rate on the same SAPI scale (-10..18, speed 3^(rate/10)) as the engine's prosody rate, which scales the voice's own
  *     RateAdjustment - the engine generates at that speed, nothing is time-stretched; its limits are 1/3x and 3x (SAPI
  *     rate 10: faster requests stay at 3x);
@@ -28,12 +30,15 @@ typedef struct cvn_voice cvn_voice;
 
 /* sdk_dir: folder with libMicrosoft.CognitiveServices.Speech.{core,extension.embedded.tts,extension.onnxruntime}.dylib
  *   (the platform's build: iOS or macOS); loaded once per process, the first time any voice opens.
- * data_dir: NeuralVoices/ - one folder per voice (Jenny/, Aria/, Guy/, Sonia/, Ryan/, Neerja/, Prabhat/: the voice's
- *   models, INIs, Tokens.xml), en-GB/ and en-IN/ (those voices' language data) and model.key (the key the voice models are encrypted with).
+ * data_dir: NeuralVoices/ - one folder per voice (<Name>/: the voice's models, INIs, Tokens.xml), <locale>/ (language
+ *   data for non-en-US locales) and model.key (the key the voice models are encrypted with).
  * onecore_dir: OneCoreVoice/ - the en-US language data and the domain files both voice families share, byte for byte.
  * work_dir: a writable folder (the extension's Caches): per voice, a folder of links to those files, since the engine reads
  *   a voice from one folder (rebuilt the first time a voice opens in a process: an app update moves the bundle).
- * voice: "Jenny", "Aria", "Guy", "Sonia", "Ryan", "Neerja", "Prabhat". NULL and err filled on failure. */
+ * voice: "Jenny", "Aria", "Guy", "Sonia", "Ryan", "Neerja", "Prabhat", "Nanami", "Keita", "Xiaoxiao", "Yunxi", "Katja",
+ *   "Conrad", "Elvira", "Alvaro", "Dalia", "Jorge", "Denise", "Henri", "SunHi", "InJoon", "Francisca", "Antonio".
+ *   NULL and err filled on failure. */
+int cvn_voice_has_data(const char *sdk_dir, const char *data_dir, const char *onecore_dir, const char *voice);
 cvn_voice *cvn_voice_open(const char *sdk_dir, const char *data_dir, const char *onecore_dir, const char *work_dir,
                           const char *voice, char *err, size_t errlen);
 void cvn_voice_close(cvn_voice *v);

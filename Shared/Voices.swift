@@ -209,22 +209,38 @@ let TRUVOICE_VOICES: [ClassicVoiceDef] = [
 
 /// The Windows 11 Narrator natural voices on Microsoft's embedded Speech SDK (cvn_bridge.c): en-US Jenny, Aria, Guy, then
 /// en-GB Sonia and Ryan (declared en-GB, so VoiceOver lists them under English (United Kingdom)), then en-IN Neerja and
-/// Prabhat (2026-09-30, declared en-IN: English (India); last, so no earlier slug moves). Slugs "neural_<name>" are
-/// permanent. Their SDK is arm64 only: an Intel Mac lists none of them.
+/// Prabhat (2026-09-30, declared en-IN: English (India)), followed by the multilingual Windows 11 natural voices across
+/// ja-JP, zh-CN, de-DE, es-ES, es-MX, fr-FR, ko-KR and pt-BR (last, so no earlier slug moves; German Katja is shown as
+/// "Katja (Natural)" so it does not collide with the OneCore Katja). Slugs "neural_<name>" are permanent. Their SDK is
+/// arm64 only: an Intel Mac lists none of them.
 let NEURAL_VOICES: [ClassicVoiceDef] = {
 #if os(macOS) && !arch(arm64)
     return []
 #else
-    return [("Jenny", true, "en-US"), ("Aria", true, "en-US"), ("Guy", false, "en-US"),
-            ("Sonia", true, "en-GB"), ("Ryan", false, "en-GB"),
-            ("Neerja", true, "en-IN"), ("Prabhat", false, "en-IN")].map { name, female, language in
-        ClassicVoiceDef(slug: "neural_" + name.lowercased(), display: name, spd: "", effect: "none", basePitch: 0,
-                        female: female, engine: .neural, neuralVoice: name, language: language)
-    }
+    return [("Jenny", "Jenny", true, "en-US"), ("Aria", "Aria", true, "en-US"), ("Guy", "Guy", false, "en-US"),
+            ("Sonia", "Sonia", true, "en-GB"), ("Ryan", "Ryan", false, "en-GB"),
+            ("Neerja", "Neerja", true, "en-IN"), ("Prabhat", "Prabhat", false, "en-IN"),
+            ("Nanami", "Nanami", true, "ja-JP"), ("Keita", "Keita", false, "ja-JP"),
+            ("Xiaoxiao", "Xiaoxiao", true, "zh-CN"), ("Yunxi", "Yunxi", false, "zh-CN"),
+            ("Katja", "Katja (Natural)", true, "de-DE"), ("Conrad", "Conrad", false, "de-DE"),
+            ("Elvira", "Elvira", true, "es-ES"), ("Alvaro", "Alvaro", false, "es-ES"),
+            ("Dalia", "Dalia", true, "es-MX"), ("Jorge", "Jorge", false, "es-MX"),
+            ("Denise", "Denise", true, "fr-FR"), ("Henri", "Henri", false, "fr-FR"),
+            ("SunHi", "SunHi", true, "ko-KR"), ("InJoon", "InJoon", false, "ko-KR"),
+            ("Francisca", "Francisca", true, "pt-BR"), ("Antonio", "Antonio", false, "pt-BR")]
+        .map { name, display, female, language in
+            ClassicVoiceDef(slug: "neural_" + name.lowercased(), display: display, spd: "", effect: "none", basePitch: 0,
+                            female: female, engine: .neural, neuralVoice: name, language: language)
+        }
 #endif
 }()
 
 enum VoiceCatalog {
+    /// Voices whose model data is present on disk, in catalog order.
+    static var availableVoices: [ClassicVoiceDef] {
+        CLASSIC_VOICES.filter { ClassicEngine.shared.isVoiceAvailable($0) }
+    }
+
     static func def(forIdentifier id: String) -> ClassicVoiceDef {
         let slug = id.split(separator: ".").last.map(String.init) ?? ""
         return CLASSIC_VOICES.first(where: { $0.slug == slug }) ?? CLASSIC_VOICES[0]
@@ -235,6 +251,7 @@ enum VoiceCatalog {
         def.display.replacingOccurrences(of: " (SAPI 5)", with: "")
             .replacingOccurrences(of: " (SAPI 4)", with: "")
             .replacingOccurrences(of: " (TruVoice)", with: "")
+            .replacingOccurrences(of: " (Natural)", with: "")
     }
 
     /// Display names used by more than one voice of this app (must stay empty; make ssml-test checks it).

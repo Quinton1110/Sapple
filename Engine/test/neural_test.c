@@ -21,6 +21,27 @@
 
 #define NV 7
 static const char *const VOICES[NV] = {"Jenny", "Aria", "Guy", "Sonia", "Ryan", "Neerja", "Prabhat"};
+static const struct {
+    const char *name, *text;
+} EXTRA_VOICES[] = {
+    {"Nanami", "こんにちは、七海です。今日はとてもいい天気ですね。"},
+    {"Keita", "こんにちは、圭太です。今日はとてもいい天気ですね。"},
+    {"Xiaoxiao", "你好，我是晓晓。今天天气非常好。"},
+    {"Yunxi", "你好，我是云希。今天天气非常好。"},
+    {"Katja", "Hallo, mein Name ist Katja. Heute ist ein schöner Tag."},
+    {"Conrad", "Hallo, mein Name ist Conrad. Heute ist ein schöner Tag."},
+    {"Elvira", "Hola, mi nombre es Elvira. Hoy hace muy buen tiempo."},
+    {"Alvaro", "Hola, mi nombre es Álvaro. Hoy hace muy buen tiempo."},
+    {"Dalia", "Hola, mi nombre es Dalia. Hoy hace muy buen tiempo."},
+    {"Jorge", "Hola, mi nombre es Jorge. Hoy hace muy buen tiempo."},
+    {"Denise", "Bonjour, je m'appelle Denise. Il fait très beau aujourd'hui."},
+    {"Henri", "Bonjour, je m'appelle Henri. Il fait très beau aujourd'hui."},
+    {"SunHi", "안녕하세요, 제 이름은 선희입니다. 오늘 날씨가 정말 좋네요."},
+    {"InJoon", "안녕하세요, 제 이름은 인준입니다. 오늘 날씨가 정말 좋네요."},
+    {"Francisca", "Olá, meu nome é Francisca. Hoje o tempo está muito bom."},
+    {"Antonio", "Olá, meu nome é Antônio. Hoje o tempo está muito bom."},
+};
+#define NEXTRA ((int)(sizeof EXTRA_VOICES / sizeof EXTRA_VOICES[0]))
 static char SDK[1024], DATA[1024], ONECORE[1024], WORK[1024];
 static int failures;
 
@@ -166,6 +187,11 @@ static void selftest(const char *out)
     /* bad setups fail cleanly */
     {
         char err[256] = "";
+        check(!cvn_voice_has_data("/nonexistent", DATA, ONECORE, "Jenny") &&
+                  !cvn_voice_has_data(SDK, "/nonexistent", ONECORE, "Jenny") &&
+                  !cvn_voice_has_data(SDK, DATA, ONECORE, "Zira") &&
+                  cvn_voice_has_data(SDK, DATA, ONECORE, "Jenny"),
+              "cvn_voice_has_data distinguishes staged voices from missing data and unknown names");
         check(!cvn_voice_open(SDK, "/nonexistent", ONECORE, WORK, "Jenny", err, sizeof err) && err[0],
               "missing data folder: open fails with a reason");
         check(!cvn_voice_open(SDK, DATA, ONECORE, WORK, "Zira", err, sizeof err), "unknown voice: open fails");
@@ -324,6 +350,24 @@ static void selftest(const char *out)
         check(m2 - m1 < 5, what);
     }
     for (i = 0; i < NV; i++) cvn_voice_close(v[i]);
+
+    /* any staged multilingual natural voices speak in their own language */
+    for (i = 0; i < NEXTRA; i++) {
+        cvn_voice *ev;
+        if (!cvn_voice_has_data(SDK, DATA, ONECORE, EXTRA_VOICES[i].name)) continue;
+        ev = open_voice(EXTRA_VOICES[i].name);
+        snprintf(what, sizeof what, "open staged %s", EXTRA_VOICES[i].name);
+        check(ev != NULL, what);
+        if (!ev) continue;
+        rc = say(ev, EXTRA_VOICES[i].text, 0, 0, &a);
+        snprintf(what, sizeof what, "%s speaks: rc %d, %.2f s, first audio %.0f ms", EXTRA_VOICES[i].name, rc,
+                 a.n / 22050.0, a.first_at * 1000);
+        check(rc == 0 && a.n > 22050, what);
+        snprintf(path, sizeof path, "%s/%s.wav", out, EXTRA_VOICES[i].name);
+        write_wav(path, a.pcm, a.n, 22050);
+        free(a.pcm);
+        cvn_voice_close(ev);
+    }
 }
 
 typedef struct {
