@@ -212,7 +212,7 @@ func runParse() {
           "names: Sam (SAPI 5), Sam (SAPI 4), Anna, Mark Happy, Peter, Alex, Jenny, Ryan, Mike for Telephone (SAPI 4)")
     var oldSlugs: [String] = ["sam", "mike", "mary", "mike_hall", "mike_stadium", "mike_space", "mary_hall", "mary_stadium",
                               "mary_space", "robosoft1", "robosoft2", "robosoft3", "robosoft4", "robosoft6", "male_whisper",
-                              "female_whisper", "anna"]
+                              "female_whisper", "betty", "beverly", "brutus", "freddy", "jack", "junior", "anna"]
     for v in ["david", "zira", "mark"] {
         for e in ["", "_happy", "_sad", "_angry"] { oldSlugs.append("onecore_" + v + e) }
     }

@@ -201,6 +201,21 @@ int main(int argc, char **argv)
             snprintf(path, sizeof path, "rate -10/0/5.5/10: %zu %zu %zu %zu samples", slow, norm, frac, fast);
             check(slow > norm && norm > frac && frac > fast, path);
         }
+        {
+            /* custom basePitch presets (Betty, Beverly, Brutus, Freddy, Jack, Junior) */
+            static const struct { const char *name, *spd; double hz; } presets[] = {
+                {"Betty", "Mary", 110}, {"Beverly", "Mary", 100},
+                {"Brutus", "Mike", 100}, {"Freddy", "Mike", 189},
+                {"Jack", "Sam", 110}, {"Junior", "Sam", 189},
+            };
+            for (i = 0; i < sizeof presets / sizeof *presets; i++) {
+                size_t pn = 0;
+                int prc = say(dir, presets[i].spd, "none", presets[i].hz, 0, 0, tail, NULL, 1, &pn);
+                snprintf(path, sizeof path, "preset %-7s (%s @ %.0f Hz): rc=%d, %zu samples",
+                         presets[i].name, presets[i].spd, presets[i].hz, prc, pn);
+                check(prc == 0 && pn > 22050, path);
+            }
+        }
         printf(failures ? "%d FAILURES\n" : "all passed\n", failures);
         return failures != 0;
     }
