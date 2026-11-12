@@ -63,8 +63,10 @@ int cv_score_find(const char *utf8, cv_score_run *runs, int max);
 int cv_sing_is_score(const char *utf8);
 
 /* Sanitizes UTF-8 into a malloc'd string (free with cv_free). Never returns NULL for non-NULL input
- * unless out of memory. */
+ * unless out of memory. cv_sanitize_unicode_alloc preserves non-English BMP scripts while stripping
+ * control characters, invisible formatting and emoji. */
 char *cv_sanitize_alloc(const char *utf8);
+char *cv_sanitize_unicode_alloc(const char *utf8);
 void cv_free(void *p);
 
 /* UTF-8 (already sanitized) -> Windows-1252, malloc'd; characters outside it become spaces. (The SAPI 4 and TruVoice
