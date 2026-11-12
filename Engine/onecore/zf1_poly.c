@@ -53,7 +53,7 @@ typedef struct polydata {
     const uint8_t *ptype, *words;
     zf1_phoneset ps;
     int nmodels;
-    crfmodel m[16];
+    crfmodel m[32];
     /* domain data (enUS.<Domain>.dat, zf1_acro_init): per-domain CPolyphony tables and the acronym CRFs */
     int ndom;
     char domname[ZF1_NDOM][16];
@@ -555,15 +555,15 @@ static int trie_lookup(const crfmodel *m, const zf_char *key, int L)
  * u32 namePoolOff, u32 modelsBase, u32 n, u32 modelOff[n], u32 nameOff[n] */
 static int crf_load_list(crfmodel *mm, int max, const uint8_t *r)
 {
-    uint32_t sp, mb, n, i;
+    uint32_t sp, mb, ntotal, n, i;
     if (!r) return -1;
     sp = zf_rd32(r);
     mb = zf_rd32(r + 4);
-    n = zf_rd32(r + 8);
+    ntotal = n = zf_rd32(r + 8);
     if (n > (uint32_t)max) n = (uint32_t)max;
     for (i = 0; i < n; i++) {
         crfmodel *m = &mm[i];
-        const uint8_t *o = r + mb + zf_rd32(r + 12 + 4 * i), *nm = r + sp + zf_rd32(r + 12 + 4 * n + 4 * i);
+        const uint8_t *o = r + mb + zf_rd32(r + 12 + 4 * i), *nm = r + sp + zf_rd32(r + 12 + 4 * ntotal + 4 * i);
         const uint8_t *pool, *t;
         uint32_t k, triesz;
         memset(m, 0, sizeof *m);
@@ -664,7 +664,7 @@ static void crf_free_list(crfmodel *mm, int n)
 static int load_models(polydata *pd, const zf1_dat *d)
 {
     size_t sz = 0;
-    int n = crf_load_list(pd->m, 16, zf1_dat_get(d, 0xd49f77b9, 0x3e135d7f, &sz));
+    int n = crf_load_list(pd->m, 32, zf1_dat_get(d, 0xd49f77b9, 0x3e135d7f, &sz));
     if (n < 0) return n;
     pd->nmodels = n;
     return 0;

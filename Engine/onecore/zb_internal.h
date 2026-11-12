@@ -6,7 +6,7 @@
 #include "zb.h"
 
 #define ZB_MAXWIN 3
-#define ZB_MAXDIM 75
+#define ZB_MAXDIM 128
 #define ZB_NSTATE 5
 
 /* model types (CHTSAcousticModelHeader +0) */
@@ -77,7 +77,7 @@ struct ZbVoice {
     int isint;                     /* APM header flag B (file 0x24) */
     int rate, bits, shift;
     int nfeat;                     /* APM features */
-    int featcol[64];               /* APM feature index -> ZB_F_* */
+    int featcol[128];               /* APM feature index -> ZB_F_* */
     int nq;
     ZbQuestion *q;
     int nmodel;

@@ -286,16 +286,47 @@ static int sink_to_words(zf1_ana *a, const zf1_toklist *tl)
     return r;
 }
 
-typedef struct { zf1_toklist *out; int base; } brk_ctx;
+static int is_cjk_or_thai(zf_char c)
+{
+    return (c >= 0x0e00 && c <= 0x0e7f) || (c >= 0x3040 && c <= 0x9fff) || (c >= 0xf900 && c <= 0xfaff);
+}
+typedef struct { zf1_ana *a; zf1_toklist *out; int base; } brk_ctx;
 static int brk_emit(void *c, int off, int len)
 {
     brk_ctx *b = (brk_ctx *)c;
+    zf1_ana *a = b->a;
+    const zf_char *s = a->sbuf + b->base + off;
+    int i, has_ns = 0;
+    for (i = 0; i < len; i++) if (is_cjk_or_thai(s[i])) { has_ns = 1; break; }
+    if (has_ns && a->lex && len > 1) {
+        zf1_lexent ent;
+        if (!zf1_lex_lookup(a->lex, s, len, &ent)) {
+            int p = 0;
+            while (p < len) {
+                if (!is_cjk_or_thai(s[p])) {
+                    int q = p + 1;
+                    while (q < len && !is_cjk_or_thai(s[q])) q++;
+                    if (zf1_tok_add(b->out, b->base + off + p, q - p, 0, NULL, 0xFFFF) < 0) return -1;
+                    p = q;
+                    continue;
+                }
+                int maxl = len - p < 16 ? len - p : 16, best = 1, l;
+                for (l = maxl; l > 1; l--) {
+                    if (zf1_lex_lookup(a->lex, s + p, l, &ent)) { best = l; break; }
+                }
+                if (zf1_tok_add(b->out, b->base + off + p, best, 0, NULL, 0xFFFF) < 0) return -1;
+                p += best;
+            }
+            return 0;
+        }
+    }
     return zf1_tok_add(b->out, b->base + off, len, 0, NULL, 0xFFFF);
 }
 
 int zf1_ana_break(zf1_ana *a, int off, int len, zf1_toklist *out)
 {
     brk_ctx b;
+    b.a = a;
     b.out = out;
     b.base = off;
     return zf1_wb_break(a->wb, a->sbuf + off, len, 1, brk_emit, &b);
@@ -323,7 +354,7 @@ int zf1_ctab_init(zf1_ctab *ct, const zf1_dat *d)
     size_t n;
     const uint8_t *r = zf1_dat_get(d, 0xf6e4f50au, 0x80b9a5a3u, &n);
     memset(ct, 0, sizeof *ct);
-    if (!r || n < 4) return -1;
+    if (!r || n < 4) return 0;
     ct->n = (int)zf_rd32(r);
     ct->rec = r + 4;
     ct->pool = r + 4 + 16 * (size_t)ct->n;

@@ -229,9 +229,12 @@ int main(int argc, char **argv)
             size_t with = 0, words = 0;
             for (i = 0; i < sizeof logo / sizeof *logo; i++) {
                 char *c = cv_sanitize_alloc(logo[i].in);
-                snprintf(path, sizeof path, "Apple logo: \"%s\" -> [%s]", logo[i].want, c ? c : "(null)");
-                check(c && !strcmp(c, logo[i].want), path);
+                char *cu = cv_sanitize_unicode_alloc(logo[i].in);
+                snprintf(path, sizeof path, "Apple logo: \"%s\" -> [%s] / [%s]", logo[i].want, c ? c : "(null)",
+                         cu ? cu : "(null)");
+                check(c && !strcmp(c, logo[i].want) && cu && !strcmp(cu, logo[i].want), path);
                 cv_free(c);
+                cv_free(cu);
             }
             say(dir, "Sam", "none", 0, 0, 0, "Pay with \xEF\xA3\xBF Pay.", NULL, 1, &with);
             say(dir, "Sam", "none", 0, 0, 0, "Pay with Apple Pay.", NULL, 1, &words);

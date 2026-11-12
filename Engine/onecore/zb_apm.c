@@ -27,7 +27,24 @@ const char *const zb_feature_path[ZB_NFEAT] = {
     "Phone.Syllable.Word.FwPosInYesNoQuestion", "Phone.Syllable.Word.Phrase.NextPhrase.SyllableNumber",
     "Phone.Syllable.Word.Phrase.NextPhrase.WordNumber", "Phone.Syllable.Word.Phrase.PrevPhrase.SyllableNumber",
     "Phone.Syllable.Word.Phrase.PrevPhrase.WordNumber", "Phone.Syllable.Word.Phrase.ToBIFinalBoundaryTone",
-    "Phone.Syllable.ToBIAccent", "Phone.Syllable.PrevSyllable.ToBIAccent", "Phone.Syllable.NextSyllable.ToBIAccent"};
+    "Phone.Syllable.ToBIAccent", "Phone.Syllable.PrevSyllable.ToBIAccent", "Phone.Syllable.NextSyllable.ToBIAccent",
+    "Phone.Syllable.Accent", "Phone.Syllable.AccentedSyllNumAfterCurrSyll",
+    "Phone.Syllable.AccentedSyllNumBeforeCurrSyll", "Phone.Syllable.BwPosInProsodicWord",
+    "Phone.Syllable.BwPosInSentence", "Phone.Syllable.ChineseToneIndex",
+    "Phone.Syllable.FwPosInProsodicWord", "Phone.Syllable.FwPosInSentence",
+    "Phone.Syllable.NextSyllable.ChineseToneIndex", "Phone.Syllable.NextSyllable.Tone",
+    "Phone.Syllable.PrevSyllable.ChineseToneIndex", "Phone.Syllable.PrevSyllable.Tone",
+    "Phone.Syllable.SyllNumFromLeftAccent", "Phone.Syllable.SyllNumToRightAccent",
+    "Phone.Syllable.Tone", "Phone.Syllable.Word.NextWord.POSTaggerPOS",
+    "Phone.Syllable.Word.POSTaggerPOS", "Phone.Syllable.Word.Phrase.ItmPhraseNumOfItnPhrase",
+    "Phone.Syllable.Word.Phrase.NextPhrase.PrimaryAccentPosition",
+    "Phone.Syllable.Word.Phrase.PrevPhrase.PrimaryAccentPosition",
+    "Phone.Syllable.Word.Phrase.PrimaryAccentPosition", "Phone.Syllable.Word.Phrase.SyllNumOfItnPhrase",
+    "Phone.Syllable.Word.Phrase.WordNumOfItnPhrase", "Phone.Syllable.Word.PrevWord.POSTaggerPOS",
+    "Phone.Syllable.Word.ProsodicWord.BwPosInPhrase", "Phone.Syllable.Word.ProsodicWord.BwPosInSentence",
+    "Phone.Syllable.Word.ProsodicWord.FwPosInPhrase", "Phone.Syllable.Word.ProsodicWord.FwPosInSentence",
+    "Phone.Syllable.Word.ProsodicWord.SyllableNumber", "Phone.Syllable.Word.ProsodicWord.WordNumber",
+    "Phone.ToneLevel"};
 
 static uint32_t rd32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
 static uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
@@ -95,7 +112,7 @@ int zb_apm_load(ZbVoice *v, const char *path, char *err, int errlen)
         uint32_t named = rd32(p);
         nf = rd32(p + 4);
         p += 8;
-        if (nf > 64) { snprintf(err, errlen, "too many features"); return -1; }
+        if (nf > 128) { snprintf(err, errlen, "too many features"); return -1; }
         v->nfeat = (int)nf;
         for (i = 0; i < nf; i++) {
             const char *s = name;
@@ -229,7 +246,14 @@ const uint8_t *zb_tree_leaf(const ZbVoice *v, const ZbModel *m, int phoneid, int
     uint32_t o = 4;
     if (m->ntree > 1 || m->treeid[0] != 0x7fffffff) {
         for (t = 0; t < m->ntree && m->treeid[t] != phoneid; t++);
-        if (t == m->ntree) return NULL;
+        if (t == m->ntree) {
+            int alt = (phoneid == 24) ? 28 : (phoneid == 25) ? 38 : (phoneid == 26) ? 45 : 3;
+            for (t = 0; t < m->ntree && m->treeid[t] != alt; t++);
+            if (t == m->ntree) {
+                for (t = 0; t < m->ntree && m->treeid[t] != 3; t++);
+                if (t == m->ntree) t = 0;
+            }
+        }
     }
     blob = m->tree + m->suboff[t * m->nstate + state];
     while (blob[o] == 0 && guard++ < 100000) {
@@ -278,7 +302,8 @@ static int yes(const char *s) { return !strcmp(s, "yes") || !strcmp(s, "Yes") ||
 int zb_ini_load(ZbVoice *v, const char *path)
 {
     ZbConfig *c = &v->cfg;
-    FILE *f;
+    uint8_t *raw;
+    size_t rawsz = 0, pos = 0;
     char line[512], sec[128] = "";
     /* ctor defaults (FUN_180017a48 / FUN_180056c00 / built-in table 0x18016d790) */
     c->volume_adj = 100; c->sps_volume_adj = 100; c->pitch_adj = 100; c->rate_adj = 100; c->pitch_range_scale = 100;
@@ -289,10 +314,25 @@ int zb_ini_load(ZbVoice *v, const char *path)
     c->sh_low = 0.075f; c->sh_high = 0.4f;
     c->qi_enabled = 0; c->qi_rate = 0; c->qi_max = 0;
     c->delay_mode = 0; c->silence_noise_suppress = 0; c->sentence_boundary_ms = 0;
-    f = fopen(path, "r");
-    if (!f) return -1;
-    while (fgets(line, sizeof line, f)) {
+    raw = readfile(path, &rawsz);
+    if (!raw) return -1;
+    if (rawsz >= 2 && raw[0] == 0xff && raw[1] == 0xfe) {
+        size_t i, j = 0;
+        for (i = 2; i + 1 < rawsz; i += 2) {
+            uint16_t ch = (uint16_t)(raw[i] | (raw[i + 1] << 8));
+            if (ch && ch < 128) raw[j++] = (uint8_t)ch;
+        }
+        rawsz = j;
+    }
+    while (pos < rawsz) {
+        size_t l = 0;
         char *eq, key[128], val[256];
+        while (pos < rawsz && raw[pos] != '\n') {
+            if (raw[pos] != '\r' && l + 1 < sizeof line) line[l++] = (char)raw[pos];
+            pos++;
+        }
+        if (pos < rawsz && raw[pos] == '\n') pos++;
+        line[l] = 0;
         trim(line);
         if (line[0] == '[') {
             char *e = strchr(line, ']');
@@ -367,7 +407,7 @@ int zb_ini_load(ZbVoice *v, const char *path)
         }
 #undef IS
     }
-    fclose(f);
+    free(raw);
     if (c->sh_step < 0) c->sh_step = c->sh_multi ? 0.3f : 0.4f;
     if (c->pdur_weight < 0) c->pdur_weight = 0;
     if (c->pdur_weight > 1) c->pdur_weight = 1;

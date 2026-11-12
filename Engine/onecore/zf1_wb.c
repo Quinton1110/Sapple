@@ -160,9 +160,18 @@ static int bs32(const uint8_t *tab, int n, uint32_t key)
     return 0;
 }
 
-int zf1_wb_is_skip(const zf1_wb *wb, uint32_t c) { return bs32(wb->t0, wb->n0, c); }
-int zf1_wb_is_split(const zf1_wb *wb, uint32_t c) { return bs32(wb->t1, wb->n1, c); }
-int zf1_wb_is_trim(const zf1_wb *wb, uint32_t c) { return bs32(wb->t2, wb->n2, c); }
+int zf1_wb_is_skip(const zf1_wb *wb, uint32_t c) {
+    if (wb->n0 == 0 && wb->n1 == 0) return c <= 0x20 || c == 0xa0 || c == 0x3000;
+    return bs32(wb->t0, wb->n0, c);
+}
+int zf1_wb_is_split(const zf1_wb *wb, uint32_t c) {
+    if (wb->n0 == 0 && wb->n1 == 0)
+        return (c >= 0x21 && c <= 0x2f) || (c >= 0x3a && c <= 0x40) || (c >= 0x5b && c <= 0x60) ||
+               (c >= 0x7b && c <= 0x7e) || (c >= 0x3001 && c <= 0x303f) || (c >= 0xff01 && c <= 0xff0f) ||
+               (c >= 0xff1a && c <= 0xff20) || (c >= 0xff3b && c <= 0xff40) || (c >= 0xff5b && c <= 0xff65);
+    return bs32(wb->t1, wb->n1, c);
+}
+int zf1_wb_is_trim(const zf1_wb *wb, uint32_t c) { return wb->n2 ? bs32(wb->t2, wb->n2, c) : 0; }
 static int is_break(const zf1_wb *wb, uint32_t c) { return zf1_wb_is_skip(wb, c) || zf1_wb_is_split(wb, c); }
 
 int zf1_wb_init(zf1_wb *wb, const zf1_dat *d, uint16_t lang)
@@ -180,7 +189,7 @@ int zf1_wb_init(zf1_wb *wb, const zf1_dat *d, uint16_t lang)
         r = zf1_dat_get(d, 0x629aa5c4u, 0x964f993au, &sz);
         old = 1;
     }
-    if (!r) return -1;
+    if (!r) return 0;
     p = r;
     end = r + sz;
     wb->n0 = (int)zf_rd32(p); wb->t0 = p + 4; p += 4 + 4 * (size_t)wb->n0;

@@ -54,58 +54,252 @@ const char *zira_tts_voice(const zira_tts *t) { return t ? t->voice : NULL; }
  * next to the en-US files in the same folder (no file names clash).  The locale decides the data file names
  * (M<lcid><Voice>, MSTTSLoc<xx>.dat, the domain .dat files: zf1_open_lcid) and the phone set of the back half
  * (read from the language data: zf2_voice_set_phoneset). */
-static const struct { const char *name; int lcid; int male; } VOICES[] = {
-    {"David", 1033, 1}, {"Zira", 1033, 0}, {"Mark", 1033, 1},
-    {"Hazel", 2057, 0}, {"George", 2057, 1}, {"Susan", 2057, 0},
-    {"Eva", 1033, 0},    /* ClassicVoices addition: Microsoft Eva (eva_voice.c) */
-    {"Sarah", 2057, 0},   /* ClassicVoices addition: Microsoft Sarah, the en-GB neural voice (eva_voice.c) */
-    /* ClassicVoices addition (2026-09-29): the other English OneCore voices, from the Windows 11 Languages and Optional
-     * Features image: en-AU Catherine / James, en-CA Linda / Richard (en-IN Heera / Ravi and en-IE Sean need multi-band
-     * excitation and larger LSF models the reconstruction does not have) */
-    {"Catherine", 3081, 0}, {"James", 3081, 1}, {"Linda", 4105, 0}, {"Richard", 4105, 1},
-    {"Matilda", 3081, 0}};  /* ClassicVoices addition (2026-09-30): Microsoft Matilda, the en-AU neural voice (eva_voice.c) */
+typedef struct {
+    const char *name;
+    const char *prefix;
+    const char *locale;
+    const char *dat;
+    int lcid;
+    int male;
+    int neural;
+} zira_voice_def;
+
+static const zira_voice_def VOICES[] = {
+    /* Original 13 English voices first (David at index 0) */
+    {"David",      "M1033David",     "en-US", "MSTTSLocEnUS.dat", 1033,  1, 0},
+    {"Zira",       "M1033Zira",      "en-US", "MSTTSLocEnUS.dat", 1033,  0, 0},
+    {"Mark",       "M1033Mark",      "en-US", "MSTTSLocEnUS.dat", 1033,  1, 0},
+    {"Hazel",      "M2057Hazel",     "en-GB", "MSTTSLocEnGB.dat", 2057,  0, 0},
+    {"George",     "M2057George",    "en-GB", "MSTTSLocEnGB.dat", 2057,  1, 0},
+    {"Susan",      "M2057Susan",     "en-GB", "MSTTSLocEnGB.dat", 2057,  0, 0},
+    {"Eva",        "M1033Eva",       "en-US", "MSTTSLocEnUS.dat", 1033,  0, 1},
+    {"Sarah",      "M2057Sarah",     "en-GB", "MSTTSLocEnGB.dat", 2057,  0, 1},
+    {"Catherine",  "M3081Catherine", "en-AU", "MSTTSLocEnAU.dat", 3081,  0, 0},
+    {"James",      "M3081James",     "en-AU", "MSTTSLocEnAU.dat", 3081,  1, 0},
+    {"Linda",      "M4105Linda",     "en-CA", "MSTTSLocEnCA.dat", 4105,  0, 0},
+    {"Richard",    "M4105Richard",   "en-CA", "MSTTSLocEnCA.dat", 4105,  1, 0},
+    {"Matilda",    "M3081Matilda",   "en-AU", "MSTTSLocEnAU.dat", 3081,  0, 1},
+    /* Additional English voices (en-CA, en-IE, en-IN) */
+    {"EvaCA",      "M4105Eva",       "en-CA", "MSTTSLocEnCA.dat", 4105,  0, 0},
+    {"Sean",       "M6153Sean",      "en-IE", "MSTTSLocEnIE.dat", 6153,  1, 0},
+    {"Heera",      "M16393Heera",    "en-IN", "MSTTSLocEnIN.dat", 16393, 0, 0},
+    {"Koyal",      "M16393Koyal",    "en-IN", "MSTTSLocEnIN.dat", 16393, 0, 0},
+    {"Ravi",       "M16393Ravi",     "en-IN", "MSTTSLocEnIN.dat", 16393, 1, 0},
+    /* ar-SA, ar-EG, bg-BG, ca-ES, cs-CZ, da-DK */
+    {"Naayf",      "M1025Naayf",     "ar-SA", "MSTTSLocArSA.dat", 1025,  1, 0},
+    {"Hoda",       "M3073Hoda",      "ar-EG", "MSTTSLocArEG.dat", 3073,  0, 0},
+    {"Ivan",       "M1026Ivan",      "bg-BG", "MSTTSLocBgBG.dat", 1026,  1, 0},
+    {"Herena",     "M1027Herena",    "ca-ES", "MSTTSLocCaES.dat", 1027,  0, 0},
+    {"Jakub",      "M1029Jakub",     "cs-CZ", "MSTTSLocCsCZ.dat", 1029,  1, 0},
+    {"Helle",      "M1030Helle",     "da-DK", "MSTTSLocDaDK.dat", 1030,  0, 0},
+    /* de-AT, de-CH, de-DE */
+    {"Michael",    "M3079Michael",   "de-AT", "MSTTSLocDeAT.dat", 3079,  1, 0},
+    {"Karsten",    "M2055Karsten",   "de-CH", "MSTTSLocDeCH.dat", 2055,  1, 0},
+    {"Hedda",      "M1031Hedda",     "de-DE", "MSTTSLocDeDE.dat", 1031,  0, 0},
+    {"Katja",      "M1031Katja",     "de-DE", "MSTTSLocDeDE.dat", 1031,  0, 0},
+    {"KatjaV2",    "M1031KatjaV2",   "de-DE", "MSTTSLocDeDE.dat", 1031,  0, 1},
+    {"Stefan",     "M1031Stefan",    "de-DE", "MSTTSLocDeDE.dat", 1031,  1, 0},
+    /* el-GR */
+    {"Stefanos",   "M1032Stefanos",  "el-GR", "MSTTSLocElGR.dat", 1032,  1, 0},
+    /* es-ES, es-MX, fi-FI */
+    {"AnaES",      "M3082Ana",       "es-ES", "MSTTSLocEsES.dat", 3082,  0, 0},
+    {"Helena",     "M3082Helena",    "es-ES", "MSTTSLocEsES.dat", 3082,  0, 0},
+    {"Laura",      "M3082Laura",     "es-ES", "MSTTSLocEsES.dat", 3082,  0, 0},
+    {"Pablo",      "M3082Pablo",     "es-ES", "MSTTSLocEsES.dat", 3082,  1, 0},
+    {"Mila",       "M2058Mila",      "es-MX", "MSTTSLocEsMX.dat", 2058,  0, 1},
+    {"Raul",       "M2058Raul",      "es-MX", "MSTTSLocEsMX.dat", 2058,  1, 0},
+    {"Sabina",     "M2058Sabina",    "es-MX", "MSTTSLocEsMX.dat", 2058,  0, 0},
+    {"Heidi",      "M1035Heidi",     "fi-FI", "MSTTSLocFiFI.dat", 1035,  0, 0},
+    /* fr-CA, fr-FR, fr-CH */
+    {"Caroline",   "M3084Caroline",  "fr-CA", "MSTTSLocFrCA.dat", 3084,  0, 0},
+    {"Claude",     "M3084Claude",    "fr-CA", "MSTTSLocFrCA.dat", 3084,  1, 0},
+    {"NathalieCA", "M3084Nathalie",  "fr-CA", "MSTTSLocFrCA.dat", 3084,  0, 0},
+    {"Hortense",   "M1036Hortense",  "fr-FR", "MSTTSLocFrFR.dat", 1036,  0, 0},
+    {"Julie",      "M1036Julie",     "fr-FR", "MSTTSLocFrFR.dat", 1036,  0, 0},
+    {"Nathalie",   "M1036Nathalie",  "fr-FR", "MSTTSLocFrFR.dat", 1036,  0, 1},
+    {"Paul",       "M1036Paul",      "fr-FR", "MSTTSLocFrFR.dat", 1036,  1, 0},
+    {"Guillaume",  "M4108Guillaume", "fr-CH", "MSTTSLocFrCH.dat", 4108,  1, 0},
+    /* he-IL, hi-IN, hr-HR, hu-HU, id-ID */
+    {"Asaf",       "M1037Asaf",      "he-IL", "MSTTSLocHeIL.dat", 1037,  1, 0},
+    {"Hemant",     "M1081Hemant",    "hi-IN", "MSTTSLocHiIN.dat", 1081,  1, 0},
+    {"Kalpana",    "M1081Kalpana",   "hi-IN", "MSTTSLocHiIN.dat", 1081,  0, 0},
+    {"Matej",      "M1050Matej",     "hr-HR", "MSTTSLocHrHR.dat", 1050,  1, 0},
+    {"Szabolcs",   "M1038Szabolcs",  "hu-HU", "MSTTSLocHuHU.dat", 1038,  1, 0},
+    {"Andika",     "M1057Andika",    "id-ID", "MSTTSLocIdID.dat", 1057,  1, 0},
+    /* it-IT */
+    {"Cosimo",     "M1040Cosimo",    "it-IT", "MSTTSLocItIT.dat", 1040,  1, 0},
+    {"Elsa",       "M1040Elsa",      "it-IT", "MSTTSLocItIT.dat", 1040,  0, 0},
+    {"ElsaV2",     "M1040ElsaV2",    "it-IT", "MSTTSLocItIT.dat", 1040,  0, 1},
+    /* ja-JP, ko-KR, ms-MY, nb-NO, nl-BE, nl-NL */
+    {"Ayumi",      "M1041Ayumi",     "ja-JP", "MSTTSLocJaJP.dat", 1041,  0, 0},
+    {"Haruka",     "M1041Haruka",    "ja-JP", "MSTTSLocJaJP.dat", 1041,  0, 0},
+    {"Ichiro",     "M1041Ichiro",    "ja-JP", "MSTTSLocJaJP.dat", 1041,  1, 0},
+    {"Sayaka",     "M1041Sayaka",    "ja-JP", "MSTTSLocJaJP.dat", 1041,  0, 0},
+    {"Heami",      "M1042Heami",     "ko-KR", "MSTTSLocKoKR.dat", 1042,  0, 0},
+    {"Rizwan",     "M1086Rizwan",    "ms-MY", "MSTTSLocMsMY.dat", 1086,  1, 0},
+    {"Jon",        "M1044Jon",       "nb-NO", "MSTTSLocNbNO.dat", 1044,  1, 0},
+    {"Bart",       "M2067Bart",      "nl-BE", "MSTTSLocNlBE.dat", 2067,  1, 0},
+    {"Frank",      "M1043Frank",     "nl-NL", "MSTTSLocNlNL.dat", 1043,  1, 0},
+    /* pl-PL, pt-BR, pt-PT, ro-RO, ru-RU, sk-SK, sl-SI, sv-SE */
+    {"Adam",       "M1045Adam",      "pl-PL", "MSTTSLocPlPL.dat", 1045,  1, 0},
+    {"Paulina",    "M1045Paulina",   "pl-PL", "MSTTSLocPlPL.dat", 1045,  0, 0},
+    {"AnaBR",      "M1046Ana",       "pt-BR", "MSTTSLocPtBR.dat", 1046,  0, 0},
+    {"Daniel",     "M1046Daniel",    "pt-BR", "MSTTSLocPtBR.dat", 1046,  1, 0},
+    {"Maria",      "M1046Maria",     "pt-BR", "MSTTSLocPtBR.dat", 1046,  0, 0},
+    {"Helia",      "M2070Helia",     "pt-PT", "MSTTSLocPtPT.dat", 2070,  0, 0},
+    {"Andrei",     "M1048Andrei",    "ro-RO", "MSTTSLocRoRO.dat", 1048,  1, 0},
+    {"Irina",      "M1049Irina",     "ru-RU", "MSTTSLocRuRU.dat", 1049,  0, 0},
+    {"Pavel",      "M1049Pavel",     "ru-RU", "MSTTSLocRuRU.dat", 1049,  1, 0},
+    {"Filip",      "M1051Filip",     "sk-SK", "MSTTSLocSkSK.dat", 1051,  1, 0},
+    {"Lado",       "M1060Lado",      "sl-SI", "MSTTSLocSlSI.dat", 1060,  1, 0},
+    {"Bengt",      "M1053Bengt",     "sv-SE", "MSTTSLocSvSE.dat", 1053,  1, 0},
+    /* ta-IN, th-TH, tr-TR, vi-VN, zh-CN, zh-HK */
+    {"Valluvar",   "M1097Valluvar",  "ta-IN", "MSTTSLocTaIN.dat", 1097,  1, 0},
+    {"Pattara",    "M1054Pattara",   "th-TH", "MSTTSLocThTH.dat", 1054,  1, 0},
+    {"Tolga",      "M1055Tolga",     "tr-TR", "MSTTSLocTrTR.dat", 1055,  1, 0},
+    {"An",         "M1066An",        "vi-VN", "MSTTSLocViVN.dat", 1066,  1, 0},
+    {"Hongyu",     "M2052Hongyu",    "zh-CN", "MSTTSLocZhCN.dat", 2052,  0, 0},
+    {"Huihui",     "M2052Huihui",    "zh-CN", "MSTTSLocZhCN.dat", 2052,  0, 0},
+    {"Kangkang",   "M2052Kangkang",  "zh-CN", "MSTTSLocZhCN.dat", 2052,  1, 0},
+    {"Yaoyao",     "M2052Yaoyao",    "zh-CN", "MSTTSLocZhCN.dat", 2052,  0, 0},
+    {"Danny",      "M3076Danny",     "zh-HK", "MSTTSLocZhHK.dat", 3076,  1, 0},
+    {"Tracy",      "M3076Tracy",     "zh-HK", "MSTTSLocZhHK.dat", 3076,  0, 0}
+};
+
+static const zira_voice_def *find_voice(const char *voice)
+{
+    size_t i;
+    if (!voice || !*voice) return NULL;
+    for (i = 0; i < sizeof VOICES / sizeof *VOICES; i++)
+        if (!stricmp_ascii(voice, VOICES[i].name) || !stricmp_ascii(voice, VOICES[i].prefix))
+            return &VOICES[i];
+    return NULL;
+}
 
 int zira_tts_voice_lcid(const char *voice)
 {
-    size_t i;
-    for (i = 0; i < sizeof VOICES / sizeof *VOICES; i++)
-        if (voice && !stricmp_ascii(voice, VOICES[i].name)) return VOICES[i].lcid;
+    const zira_voice_def *vd = find_voice(voice);
+    return vd ? vd->lcid : 0;
+}
+
+static int file_exists_z(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (f) { fclose(f); return 1; }
     return 0;
 }
 
-static const char *lcid_tag(int lcid)
+static int ext_exists_z(const char *vp, const char *UPPER, const char *lower)
 {
-    switch (lcid) {
-    case 2057: return "EnGB";
-    case 3081: return "EnAU";
-    case 4105: return "EnCA";
-    default: return "EnUS";
+    char p[1200];
+    snprintf(p, sizeof p, "%s.%s", vp, UPPER);
+    if (file_exists_z(p)) return 1;
+    snprintf(p, sizeof p, "%s.%s", vp, lower);
+    return file_exists_z(p);
+}
+
+/* Resolves `<dir>/<prefix>` (or `<dir>/<locale>/<prefix>`) on case-sensitive filesystems, accepting both canonical
+ * `M3079Michael` and Windows' raw `m3079Michael` as well as `.APM` / `.apm`. Returns 1 when the APM exists. */
+static int resolve_voice_prefix(char *out, size_t cap, const char *dir, const zira_voice_def *vd)
+{
+    char alt_prefix[32], low_loc[16];
+    const char *pfxs[2];
+    size_t np = 1, i;
+    pfxs[0] = vd->prefix;
+    if (vd->prefix[0] == 'M') {
+        snprintf(alt_prefix, sizeof alt_prefix, "m%s", vd->prefix + 1);
+        pfxs[np++] = alt_prefix;
     }
+    for (i = 0; vd->locale[i] && i + 1 < sizeof low_loc; i++)
+        low_loc[i] = (char)(vd->locale[i] >= 'A' && vd->locale[i] <= 'Z' ? vd->locale[i] + 32 : vd->locale[i]);
+    low_loc[i] = 0;
+    for (i = 0; i < np; i++) {
+        snprintf(out, cap, "%s/%s", dir, pfxs[i]);
+        if (ext_exists_z(out, "APM", "apm")) return 1;
+    }
+    for (i = 0; i < np; i++) {
+        snprintf(out, cap, "%s/%s/%s", dir, vd->locale, pfxs[i]);
+        if (ext_exists_z(out, "APM", "apm")) return 1;
+        snprintf(out, cap, "%s/%s/%s", dir, low_loc, pfxs[i]);
+        if (ext_exists_z(out, "APM", "apm")) return 1;
+    }
+    snprintf(out, cap, "%s/%s", dir, vd->prefix);
+    return 0;
+}
+
+/* Resolves `<dir>/MSTTSLoc<xx>.dat` (or `.DAT`, flat or under `<locale>/`). Returns 1 when found. */
+static int resolve_dat_path(char *out, size_t cap, const char *dir, const zira_voice_def *vd)
+{
+    char upper_dat[32], low_loc[16];
+    const char *dats[2];
+    size_t n = strlen(vd->dat), nd = 1, i;
+    dats[0] = vd->dat;
+    if (n > 4 && !strcmp(vd->dat + n - 4, ".dat")) {
+        snprintf(upper_dat, sizeof upper_dat, "%.*s.DAT", (int)(n - 4), vd->dat);
+        dats[nd++] = upper_dat;
+    }
+    for (i = 0; vd->locale[i] && i + 1 < sizeof low_loc; i++)
+        low_loc[i] = (char)(vd->locale[i] >= 'A' && vd->locale[i] <= 'Z' ? vd->locale[i] + 32 : vd->locale[i]);
+    low_loc[i] = 0;
+    for (i = 0; i < nd; i++) {
+        snprintf(out, cap, "%s/%s", dir, dats[i]);
+        if (file_exists_z(out)) return 1;
+    }
+    for (i = 0; i < nd; i++) {
+        snprintf(out, cap, "%s/%s/%s", dir, vd->locale, dats[i]);
+        if (file_exists_z(out)) return 1;
+        snprintf(out, cap, "%s/%s/%s", dir, low_loc, dats[i]);
+        if (file_exists_z(out)) return 1;
+    }
+    snprintf(out, cap, "%s/%s", dir, vd->dat);
+    return 0;
+}
+
+int zira_tts_voice_has_data(const char *data_dir, const char *voice)
+{
+    char vpath[1200], dat[1200];
+    const zira_voice_def *vd;
+    if (!data_dir || !*data_dir || !voice || !*voice) return 0;
+    vd = find_voice(voice);
+    if (!vd) return 0;
+    if (!resolve_voice_prefix(vpath, sizeof vpath, data_dir, vd)) return 0;
+    if (!ext_exists_z(vpath, "INI", "ini")) return 0;
+    if (!resolve_dat_path(dat, sizeof dat, data_dir, vd)) return 0;
+    if (vd->neural) {
+        if (!ext_exists_z(vpath, "NNM", "nnm") || !ext_exists_z(vpath, "HEQ", "heq") ||
+            !ext_exists_z(vpath, "TDAT", "tdat"))
+            return 0;
+    }
+    return 1;
 }
 
 zira_tts *zira_tts_open(const char *data_dir, const char *voice, char *err, size_t errlen)
 {
     zira_tts *t = (zira_tts *)calloc(1, sizeof *t);
     char vpath[1200], dat[1200];
-    size_t i, n;
+    size_t n;
     const uint8_t *ps;
+    const zira_voice_def *vd;
     if (!t) {
         if (err) snprintf(err, errlen, "out of memory");
         return NULL;
     }
     snprintf(t->dir, sizeof t->dir, "%s", data_dir && *data_dir ? data_dir : DEF_DIR);
-    snprintf(t->voice, sizeof t->voice, "%s", voice && *voice ? voice : "David");
-    t->lcid = 1033;
-    t->male = stricmp_ascii(t->voice, "Zira") != 0;
-    for (i = 0; i < sizeof VOICES / sizeof *VOICES; i++)
-        if (!stricmp_ascii(t->voice, VOICES[i].name)) {
-            snprintf(t->voice, sizeof t->voice, "%s", VOICES[i].name);
-            t->lcid = VOICES[i].lcid;
-            t->male = VOICES[i].male;
-        }
+    vd = (voice && *voice) ? find_voice(voice) : &VOICES[0];
+    if (vd) {
+        snprintf(t->voice, sizeof t->voice, "%s", vd->name);
+        t->lcid = vd->lcid;
+        t->male = vd->male;
+        resolve_voice_prefix(vpath, sizeof vpath, t->dir, vd);
+        resolve_dat_path(dat, sizeof dat, t->dir, vd);
+    } else {
+        snprintf(t->voice, sizeof t->voice, "%s", voice);
+        t->lcid = 1033;
+        t->male = stricmp_ascii(t->voice, "Zira") != 0;
+        snprintf(vpath, sizeof vpath, "%s/M%d%s", t->dir, t->lcid, t->voice);
+        snprintf(dat, sizeof dat, "%s/MSTTSLocEnUS.dat", t->dir);
+    }
     t->sapi.volume = 100;
-    snprintf(vpath, sizeof vpath, "%s/M%d%s", t->dir, t->lcid, t->voice);
-    snprintf(dat, sizeof dat, "%s/MSTTSLoc%s.dat", t->dir, lcid_tag(t->lcid));
     t->vb = zb_voice_load(vpath, err, (int)errlen);
     if (!t->vb) goto fail;
     t->vf = zf2_voice_load(vpath);
@@ -120,7 +314,7 @@ zira_tts *zira_tts_open(const char *data_dir, const char *voice, char *err, size
         if (err) snprintf(err, errlen, "bad phone set in %s", dat);
         goto fail;
     }
-    if (!stricmp_ascii(t->voice, "Eva") || !stricmp_ascii(t->voice, "Sarah") || !stricmp_ascii(t->voice, "Matilda")) {
+    if (vd && vd->neural) {
         /* ClassicVoices addition: the neural back end (+ Eva's prosody models) */
         char e2[256];
         t->eva = eva_model_open(vpath, t->lcid, t->vf, e2, sizeof e2);
