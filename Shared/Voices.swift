@@ -126,6 +126,12 @@ let CLASSIC_VOICES: [ClassicVoiceDef] = [
     ClassicVoiceDef(slug: "robosoft6",      display: "RoboSoft Six (SAPI 5)",    spd: "Sam",  effect: "robosoft6", basePitch: 100, female: false),
     ClassicVoiceDef(slug: "male_whisper",   display: "Male Whisper (SAPI 5)",    spd: "Mike", effect: "whisper",   basePitch: 0,   female: false),
     ClassicVoiceDef(slug: "female_whisper", display: "Female Whisper (SAPI 5)",  spd: "Mary", effect: "whisper",   basePitch: 0,   female: true),
+    ClassicVoiceDef(slug: "betty",          display: "Betty (SAPI 5)",           spd: "Mary", effect: "none",      basePitch: 110, female: true),
+    ClassicVoiceDef(slug: "beverly",        display: "Beverly (SAPI 5)",         spd: "Mary", effect: "none",      basePitch: 100, female: true),
+    ClassicVoiceDef(slug: "brutus",         display: "Brutus (SAPI 5)",          spd: "Mike", effect: "none",      basePitch: 100, female: false),
+    ClassicVoiceDef(slug: "freddy",         display: "Freddy (SAPI 5)",          spd: "Mike", effect: "none",      basePitch: 189, female: false),
+    ClassicVoiceDef(slug: "jack",           display: "Jack (SAPI 5)",            spd: "Sam",  effect: "none",      basePitch: 110, female: false),
+    ClassicVoiceDef(slug: "junior",         display: "Junior (SAPI 5)",          spd: "Sam",  effect: "none",      basePitch: 189, female: false),
 ] + [ANNA_VOICE] + ONECORE_VOICES + SAPI4_VOICES + TRUVOICE_VOICES + NEURAL_VOICES
 
 /// Microsoft Anna (Windows Vista / 7, SAPI 5.3): one voice, the engine's own. Slug "anna" is permanent.
