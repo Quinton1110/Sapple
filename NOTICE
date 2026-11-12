@@ -96,6 +96,8 @@ not covered by any licence of this project, and it will be removed on request by
 - L&H TruVoice engine and its data tables: originally Copyright (c) 1991-1997 Centigram Communications Corp.; the
   technology passed to Lernout & Hauspie Speech Products (1997), then to ScanSoft (2001), which became Nuance
   Communications (2005). Where the rights sit today has not been established (see Engine/opentv/NOTICE).
+- IBM ProTALKER 97 Japanese engine Tts_mgr.dll and its dictionary and voice unit data (読み秀君 / 読み子ちゃん):
+  International Business Machines Corporation.
 
 Microsoft and Windows are trademarks of Microsoft Corporation. This project is not affiliated with, endorsed by
 or sponsored by Microsoft, Nuance or any other owner named here.

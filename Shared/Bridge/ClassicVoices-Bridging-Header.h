@@ -8,3 +8,4 @@
 #include "cva_bridge.h"
 #include "cvo_bridge.h"
 #include "cvn_bridge.h"
+#include "cvp_bridge.h"

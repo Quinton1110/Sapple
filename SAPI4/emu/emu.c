@@ -1,11 +1,22 @@
 // Core of the Win32 environment: memory, thunks, heap, threads/scheduler, guest calls, PE loader.
 #include "emu_internal.h"
-#include <dirent.h>
 #include <stdarg.h>
-#include <strings.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#define MAP_FAILED ((void *)-1)
+static inline void *emu_mmap(size_t len) { void *p = calloc(1, len); return p ? p : MAP_FAILED; }
+static inline void emu_munmap(void *p, size_t len) { (void)len; if (p && p != MAP_FAILED) free(p); }
+typedef int pthread_once_t;
+#define PTHREAD_ONCE_INIT 0
+static inline void pthread_once(pthread_once_t *o, void (*fn)(void)) { if (!*o) { *o = 1; fn(); } }
+#else
+#include <dirent.h>
+#include <strings.h>
 #include <sys/mman.h>
 #include <pthread.h>
+static inline void *emu_mmap(size_t len) { return mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); }
+static inline void emu_munmap(void *p, size_t len) { if (p && p != MAP_FAILED) munmap(p, len); }
+#endif
 
 int emu_trace_api = 0;
 
@@ -810,7 +821,7 @@ Emu *emu_create(uint32_t mem_size) {
     pthread_once(&g_once, register_all_apis);
     Emu *e = calloc(1, sizeof *e);
     if (!e) return NULL;
-    void *m = mmap(NULL, (size_t)mem_size + 0x10000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    void *m = emu_mmap((size_t)mem_size + 0x10000);
     if (m == MAP_FAILED) { free(e); return NULL; }
     e->mem = m;
     e->mem_size = mem_size;
@@ -827,7 +838,7 @@ Emu *emu_create(uint32_t mem_size) {
     e->cpu.fault_jmp = &jb;
     if (setjmp(jb)) {
         EMU_LOG("emu_create: %s\n", e->cpu.fault_msg);
-        munmap(e->mem, (size_t)mem_size + 0x10000);
+        emu_munmap(e->mem, (size_t)mem_size + 0x10000);
         free(e);
         return NULL;
     }
@@ -858,6 +869,6 @@ void emu_destroy(Emu *e) {
     for (int i = 0; i < 16; i++) if (e->crt_files[i].fp) { fclose(e->crt_files[i].fp); e->crt_files[i].fp = NULL; }
     x86_free_code_cache(&e->cpu);
     for (int i = 0; i < e->nhosts; i++) if (e->hosts[i].owned_name) free((void *)e->hosts[i].name);
-    munmap(e->mem, (size_t)e->mem_size + 0x10000);
+    emu_munmap(e->mem, (size_t)e->mem_size + 0x10000);
     free(e);
 }
