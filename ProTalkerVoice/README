@@ -1,0 +1,4 @@
+Place IBM ProTALKER 97 Japanese files here (gitignored, never redistributed):
+  Tts_mgr.dll
+  DICT/ (ACC2.DCT and sibling dictionary files)
+  UNIT/ (WFCM1000.DAT, WFCF1000.DAT and sibling unit files)

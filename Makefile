@@ -68,24 +68,30 @@ TVDATA = TruVoiceData/tvdata.s
 # as native C" further down) and the old path (SAPI4/emu, msttssyn.dll in the x86 interpreter: tests and make sapi4-ab only)
 SAPI4N = Engine/sapi4/lib/sapi4tts.c Engine/sapi4/lib/stubs.c Engine/sapi4/port/dllimage.c $(sort $(wildcard Engine/sapi4/src/*.c))
 SAPI4NFLAGS = -std=c11 -ffp-contract=off -fno-builtin -w -IEngine/sapi4/src -IEngine/sapi4/port -IEngine/sapi4/lib
-SAPI4LIB = SAPI4/emu/x86.c SAPI4/emu/emu.c SAPI4/emu/crt.c SAPI4/emu/winapi.c SAPI4/emu/ole.c \
-           SAPI4/emu/registry.c SAPI4/emu/sapi4_tts.c
+SAPI4EMU = SAPI4/emu/x86.c SAPI4/emu/emu.c SAPI4/emu/crt.c SAPI4/emu/winapi.c SAPI4/emu/ole.c SAPI4/emu/registry.c
+SAPI4LIB = $(SAPI4EMU) SAPI4/emu/sapi4_tts.c
+PROTALKER = Engine/protalker/protalker_tts.c
 SWIFT_SSML = Shared/SSML.swift Shared/SSMLCapture.swift Shared/SingingMode.swift Shared/SpeechRate.swift Shared/Voices.swift \
              Shared/ClassicEngine.swift Tests/ssml/main.swift
 SSMLOBJ = build/mac/ssml
 
 build/mac/ssml_test: $(SWIFT_SSML) $(ENGINE) $(BRIDGE) Shared/Bridge/cv4n_bridge.c Shared/Bridge/cv_resample.c \
-                     Shared/Bridge/cva_bridge.c Shared/Bridge/cvo_bridge.c Shared/Bridge/cvt_bridge.c Shared/Bridge/cvn_bridge.c \
-                     $(SAPI4N) $(ANNA) $(ONECORE) \
+                     Shared/Bridge/cva_bridge.c Shared/Bridge/cvo_bridge.c Shared/Bridge/cvt_bridge.c \
+                     Shared/Bridge/cvn_bridge.c Shared/Bridge/cvp_bridge.c \
+                     $(SAPI4N) $(ANNA) $(ONECORE) $(PROTALKER) $(SAPI4EMU) \
                      $(OPENTV) $(TVDATA) Shared/Bridge/*.h Engine/anna/*.h Engine/onecore/*.h Engine/opentv/include/tvtts.h \
-                     Engine/sapi4/src/*.h Engine/sapi4/lib/sapi4tts.h
+                     Engine/sapi4/src/*.h Engine/sapi4/lib/sapi4tts.h Engine/protalker/*.h SAPI4/emu/*.h
 	mkdir -p $(SSMLOBJ)
 	rm -f $(SSMLOBJ)/*.o
 	cd $(SSMLOBJ) && clang -c -O2 -std=c99 -w -DCV_NO_DEBUG_ENV -I../../../Engine/sam -I../../../Shared/Bridge \
 	  $(addprefix ../../../,$(ENGINE) $(BRIDGE))
 	cd $(SSMLOBJ) && clang -c -O2 -w -DCV_NO_DEBUG_ENV -I../../../Engine/sam -I../../../Shared/Bridge -I../../../Engine/sapi4/lib \
-	  -I../../../Engine/anna -I../../../Engine/onecore ../../../Shared/Bridge/cv4n_bridge.c ../../../Shared/Bridge/cv_resample.c \
-	  ../../../Shared/Bridge/cva_bridge.c ../../../Shared/Bridge/cvo_bridge.c ../../../Shared/Bridge/cvn_bridge.c
+	  -I../../../Engine/anna -I../../../Engine/onecore -I../../../Engine/protalker \
+	  ../../../Shared/Bridge/cv4n_bridge.c ../../../Shared/Bridge/cv_resample.c \
+	  ../../../Shared/Bridge/cva_bridge.c ../../../Shared/Bridge/cvo_bridge.c \
+	  ../../../Shared/Bridge/cvn_bridge.c ../../../Shared/Bridge/cvp_bridge.c
+	cd $(SSMLOBJ) && clang -c -O2 -std=gnu11 -w -DCV_NO_DEBUG_ENV -I../../../Engine/protalker -I../../../SAPI4/emu \
+	  $(addprefix ../../../,$(PROTALKER) $(SAPI4EMU))
 	cd $(SSMLOBJ) && clang -c -O2 -std=c99 -w -DCV_NO_DEBUG_ENV -I../../../Engine/sam -I../../../Shared/Bridge \
 	  -I../../../Engine/opentv/include ../../../Shared/Bridge/cvt_bridge.c
 	cd $(SSMLOBJ) && clang -c -O2 $(OPENTVFLAGS) $(addprefix -I../../../,Engine/opentv/src Engine/opentv/include \
@@ -97,7 +103,7 @@ build/mac/ssml_test: $(SWIFT_SSML) $(ENGINE) $(BRIDGE) Shared/Bridge/cv4n_bridge
 	  $(addprefix ../../../../,$(SAPI4N))
 	swiftc -O -import-objc-header Shared/Bridge/ClassicVoices-Bridging-Header.h \
 	  -Xcc -IShared/Bridge -Xcc -IEngine/sam -Xcc -IEngine/sapi4/lib -Xcc -IEngine/anna -Xcc -IEngine/onecore \
-	  -Xcc -IEngine/opentv/include $(SWIFT_SSML) \
+	  -Xcc -IEngine/opentv/include -Xcc -IEngine/protalker -Xcc -ISAPI4/emu $(SWIFT_SSML) \
 	  $(SSMLOBJ)/*.o $(SSMLOBJ)/sapi4/*.o -o $@
 
 ssml-test: build/mac/ssml_test
@@ -391,6 +397,23 @@ neural-bench: build/mac/neural_test
 	./build/mac/neural_test $(CURDIR) bench
 
 .PHONY: neural-stage neural-data neural-test neural-threads neural-bench
+
+# IBM ProTALKER 97 Japanese voices (読み秀君 / 読み子ちゃん) running Tts_mgr.dll in SAPI4/emu through cvp_bridge.c.
+PTBRIDGE = Shared/Bridge/cvp_bridge.c Shared/Bridge/cv_bridge.c
+PTCFLAGS = -std=gnu11 -Wall -Wno-unused-parameter -DCV_NO_DEBUG_ENV -IEngine/protalker -ISAPI4/emu -IShared/Bridge -IEngine/sam
+PTDATA ?= ProTalkerVoice
+PTDEPS = $(PROTALKER) $(SAPI4EMU) $(PTBRIDGE) $(ENGINE) Engine/protalker/*.h SAPI4/emu/*.h Shared/Bridge/*.h Engine/test/protalker_test.c
+
+build/mac/protalker_test: $(PTDEPS)
+	mkdir -p build/mac
+	$(CC) $(PTCFLAGS) -O2 $(PROTALKER) $(SAPI4EMU) $(PTBRIDGE) $(ENGINE) Engine/test/protalker_test.c \
+	  -framework CoreFoundation -lm -lpthread -o $@
+
+protalker-test: build/mac/protalker_test
+	mkdir -p samples/protalker
+	./build/mac/protalker_test $(PTDATA) selftest samples/protalker
+
+.PHONY: protalker-test
 
 # A release: builds the IPA and the notarized Mac zip, publishes them with the AltStore source and the downloads page
 # (tools/release.sh; settings in tools/release.local).

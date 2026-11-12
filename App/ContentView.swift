@@ -9,7 +9,11 @@ struct ContentView: View {
     @StateObject private var previewPlayer = PreviewPlayer()   // the Play / Stop button's audio (PreviewPlayer.swift)
     @State private var singing = SingingMode.load()   // shared with the extension (app group), saved on every change
 
-    private var voice: ClassicVoiceDef { CLASSIC_VOICES[min(voiceIndex, CLASSIC_VOICES.count - 1)] }
+    private var voices: [ClassicVoiceDef] {
+        let v = VoiceCatalog.availableVoices
+        return v.isEmpty ? CLASSIC_VOICES : v
+    }
+    private var voice: ClassicVoiceDef { voices[min(voiceIndex, max(0, voices.count - 1))] }
     private var speedPercent: Int { Int((speed * 100).rounded()) }
     private var speedDescription: String { SpeechRate.describe(fraction: speed) }
     private var transposeDescription: String {
@@ -30,33 +34,12 @@ struct ContentView: View {
             Form {
                 Section("Voice") {
                     Picker("Voice", selection: $voiceIndex) {
-                        Section("SAPI 5 voices") {   // Microsoft Anna (SAPI 5.3) is listed here too
-                            ForEach(Array(CLASSIC_VOICES.enumerated()).filter { $0.element.engine == .sapi5 || $0.element.engine == .anna }, id: \.offset) { i, v in
-                                Text(v.display).tag(i)
-                            }
-                        }
-                        Section("Windows 10") {   // Microsoft David, Zira and Mark, plain and in their emotion presets; Hazel, George, Susan; Catherine, James, Linda, Richard, Matilda
-                            ForEach(Array(CLASSIC_VOICES.enumerated()).filter { $0.element.engine == .onecore }, id: \.offset) { i, v in
-                                Text(v.display).tag(i)
-                            }
-                        }
-                        Section("SAPI 4 voices") {
-                            ForEach(Array(CLASSIC_VOICES.enumerated()).filter { $0.element.engine == .sapi4 }, id: \.offset) { i, v in
-                                Text(v.display).tag(i)
-                            }
-                        }
-                        Section("TruVoice") {
-                            ForEach(Array(CLASSIC_VOICES.enumerated()).filter { $0.element.engine == .truvoice }, id: \.offset) { i, v in
-                                Text(v.display).tag(i)
-                            }
-                        }
-                        if CLASSIC_VOICES.contains(where: { $0.engine == .neural }) {   // none on an Intel Mac
-                            Section("Neural") {   // Jenny, Aria, Guy, Sonia, Ryan (Windows 11 natural voices)
-                                ForEach(Array(CLASSIC_VOICES.enumerated()).filter { $0.element.engine == .neural }, id: \.offset) { i, v in
-                                    Text(v.display).tag(i)
-                                }
-                            }
-                        }
+                        voiceSection("SAPI 5 voices") { $0.engine == .sapi5 || $0.engine == .anna }
+                        voiceSection("Windows 10") { $0.engine == .onecore }
+                        voiceSection("SAPI 4 voices") { $0.engine == .sapi4 }
+                        voiceSection("TruVoice") { $0.engine == .truvoice }
+                        voiceSection("Neural") { $0.engine == .neural }
+                        voiceSection("IBM ProTALKER 97") { $0.engine == .protalker }
                     }
                     .onChange(of: voiceIndex) { _, _ in
                         previewPlayer.stop()
@@ -166,14 +149,40 @@ struct ContentView: View {
         }
     }
 
+    @ViewBuilder
+    private func voiceSection(_ title: String, matching: (ClassicVoiceDef) -> Bool) -> some View {
+        let items = Array(voices.enumerated()).filter { matching($0.element) }
+        if !items.isEmpty {
+            Section(title) {
+                ForEach(items, id: \.offset) { i, v in
+                    Text(v.display).tag(i)
+                }
+            }
+        }
+    }
+
     // MARK: - Actions
 
     private func prefill() {
+        let name = VoiceCatalog.shortName(voice)
+        let prefix = String(voice.language.prefix(2))
+        switch prefix {
+        case "ja": text = "こんにちは、\(name)です。"
+        case "zh": text = voice.language == "zh-HK" ? "你好，我係\(name)。" : "你好，我是\(name)。"
+        case "ko": text = "안녕하세요, \(name)입니다."
+        case "de": text = "Hallo, hier spricht \(name)."
+        case "fr": text = "Bonjour, voici la voix de \(name)."
+        case "es": text = "Hola, esta es la voz de \(name)."
+        case "it": text = "Ciao, questa è la voce di \(name)."
+        case "pt": text = "Olá, esta é a voz de \(name)."
+        case "ru": text = "Здравствуйте, это голос \(name)."
+        default:
 #if os(macOS)
-        text = "This is \(VoiceCatalog.shortName(voice)), natively on the Mac."
+            text = "This is \(name), natively on the Mac."
 #else
-        text = "This is \(VoiceCatalog.shortName(voice)), natively on iOS."
+            text = "This is \(name), natively on iOS."
 #endif
+        }
     }
 
     private var previewHint: String {

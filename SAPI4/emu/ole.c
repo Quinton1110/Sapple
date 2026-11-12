@@ -2,10 +2,12 @@
 // small compound-file (MS-CFB v3/v4) reader.
 #include "emu_internal.h"
 #include <fcntl.h>
+#include <sys/stat.h>
+#ifndef _WIN32
 #include <strings.h>
 #include <sys/mman.h>
-#include <sys/stat.h>
 #include <unistd.h>
+#endif
 
 #define A(i) x86_arg(c, (i))
 
@@ -54,15 +56,18 @@ static uint8_t *cfb_read_chain(Cfb *f, uint32_t s, size_t size, size_t *outlen) 
 }
 
 static Cfb *cfb_open(const char *path) {
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return NULL;
-    struct stat st;
-    if (fstat(fd, &st) != 0 || st.st_size < 512) { close(fd); return NULL; }
-    void *map = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-    close(fd);
-    if (map == MAP_FAILED) return NULL;
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return NULL;
+    fseek(fp, 0, SEEK_END);
+    long fsz = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    if (fsz < 512) { fclose(fp); return NULL; }
+    void *map = malloc((size_t)fsz);
+    if (!map || fread(map, 1, (size_t)fsz, fp) != (size_t)fsz) { fclose(fp); free(map); return NULL; }
+    fclose(fp);
     Cfb *f = calloc(1, sizeof *f);
-    if (!f) { munmap(map, (size_t)st.st_size); return NULL; }
+    if (!f) { free(map); return NULL; }
+    struct { size_t st_size; } st = { (size_t)fsz };
     f->data = map;
     f->len = (size_t)st.st_size;
     static const uint8_t sig[8] = { 0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1 };
@@ -121,12 +126,12 @@ static Cfb *cfb_open(const char *path) {
     f->refs = 1;
     return f;
 bad:
-    munmap(f->data, f->len); free(f->fat); free(f);
+    free(f->data); free(f->fat); free(f);
     return NULL;
 }
 static void cfb_release(Cfb *f) {
     if (--f->refs > 0) return;
-    munmap(f->data, f->len); free(f->fat); free(f->mfat); free(f->ents); free(f->ministream); free(f);
+    free(f->data); free(f->fat); free(f->mfat); free(f->ents); free(f->ministream); free(f);
 }
 static uint8_t *cfb_stream(Cfb *f, CfbEntry *e, size_t *len) {
     if (e->size < f->cutoff) {

@@ -93,7 +93,7 @@ public final class ClassicVoicesProvider: AVSpeechSynthesisProviderAudioUnit {
         let def = VoiceCatalog.def(forIdentifier: speechRequest.voice.identifier)
         let rate = Self.sapiRate(fromSSML: ssml, voiceSlug: def.slug)
         // The neural voices also pause at line breaks (the other engines' text is split exactly as before).
-        let segments = SSML.segments(ssml, lineBreaks: def.engine == .neural)
+        let segments = SSML.segments(ssml, lineBreaks: def.engine == .neural || def.engine == .protalker)
         // Diagnostics carry no spoken content.
         log.info("request voice=\(def.slug, privacy: .public) segments=\(segments.count) rate=\(rate, format: .fixed(precision: 1))")
         // Off unless Quinton switches it on in the app (15 minutes at most); records structure, never words.
@@ -132,7 +132,7 @@ public final class ClassicVoicesProvider: AVSpeechSynthesisProviderAudioUnit {
 
     public override var speechVoices: [AVSpeechSynthesisProviderVoice] {
         get {
-            CLASSIC_VOICES.map { def in
+            VoiceCatalog.availableVoices.map { def in
                 let v = AVSpeechSynthesisProviderVoice(
                     name: def.display,
                     identifier: def.identifier,
