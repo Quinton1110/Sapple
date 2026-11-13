@@ -68,6 +68,7 @@ enum ClassicEngineKind: Hashable {
     case anna       // Engine/anna: Microsoft Anna (Vista / 7 TTS20) reconstructed in C, Microsoft's data (AnnaVoice)
     case onecore    // Engine/onecore: Microsoft David / Zira / Mark / Hazel / George / Susan / Eva / Sarah / Catherine / James / Linda / Richard / Matilda (Windows 10 / 11), data OneCoreVoice
     case neural     // Microsoft's embedded Speech SDK (NeuralSDK, dlopen'ed) + cvn_bridge.c: Jenny / Aria / Guy / Sonia / Ryan / Neerja / Prabhat, data NeuralVoices
+    case protalker  // Engine/protalker + SAPI4/emu: IBM ProTALKER 97 Japanese voices (読み秀君 / 読み子ちゃん), data ProTalkerVoice
 }
 
 struct ClassicVoiceDef: Hashable {
@@ -81,6 +82,7 @@ struct ClassicVoiceDef: Hashable {
     var sapi4Mode: String = ""   // .sapi4 / .truvoice: the engine's own mode name ("Mike in Hall")
     var neuralVoice: String = ""  // .neural: "Jenny", "Aria", "Guy", "Sonia", "Ryan", "Neerja", "Prabhat" (NeuralVoices/<name>)
     var oneCoreVoice: String = "" // .onecore: "David", "Zira", "Mark", "Eva" (M1033<name>.*), "Hazel", "George", "Susan", "Sarah" (M2057<name>.*), "Catherine", "James", "Matilda" (M3081<name>.*), "Linda", "Richard" (M4105<name>.*)
+    var proTalkerVoice: String = "" // .protalker: "ProTalker_Hide" (読み秀君) or "ProTalker_Ko" (読み子ちゃん)
     var emotion: String = ""      // .onecore: "" (normal), "happy", "sad" or "angry" (the voice file's [EmotionRecipe])
     var language: String = "en-US" // BCP 47; what VoiceOver lists the voice under (the en-GB OneCore voices: "en-GB")
 
@@ -99,6 +101,12 @@ private func sapi4Voice(_ slug: String, _ display: String, mode: String, female:
 private func truVoice(_ slug: String, _ name: String, mode: String, female: Bool) -> ClassicVoiceDef {
     ClassicVoiceDef(slug: slug, display: TRUVOICE_DISPLAY_NAMES[name] ?? name, spd: "", effect: "none", basePitch: 0,
                     female: female, engine: .truvoice, sapi4Mode: mode + ", American English (TruVoice)")
+}
+
+/// A voice of the IBM ProTALKER 97 Japanese engine (oice is what cvp_bridge opens).
+private func proTalkerVoice(_ slug: String, _ display: String, voice: String, female: Bool) -> ClassicVoiceDef {
+    ClassicVoiceDef(slug: slug, display: display, spd: "", effect: "none", basePitch: 0,
+                    female: female, engine: .protalker, proTalkerVoice: voice, language: "ja-JP")
 }
 
 /// ⚙️ THE ONE PLACE a TruVoice voice's shown name can differ from its speaker's name. Empty = every TruVoice voice shows
@@ -126,7 +134,7 @@ let CLASSIC_VOICES: [ClassicVoiceDef] = [
     ClassicVoiceDef(slug: "robosoft6",      display: "RoboSoft Six (SAPI 5)",    spd: "Sam",  effect: "robosoft6", basePitch: 100, female: false),
     ClassicVoiceDef(slug: "male_whisper",   display: "Male Whisper (SAPI 5)",    spd: "Mike", effect: "whisper",   basePitch: 0,   female: false),
     ClassicVoiceDef(slug: "female_whisper", display: "Female Whisper (SAPI 5)",  spd: "Mary", effect: "whisper",   basePitch: 0,   female: true),
-] + [ANNA_VOICE] + ONECORE_VOICES + SAPI4_VOICES + TRUVOICE_VOICES + NEURAL_VOICES
+] + [ANNA_VOICE] + ONECORE_VOICES + SAPI4_VOICES + TRUVOICE_VOICES + NEURAL_VOICES + PROTALKER_VOICES
 
 /// Microsoft Anna (Windows Vista / 7, SAPI 5.3): one voice, the engine's own. Slug "anna" is permanent.
 let ANNA_VOICE = ClassicVoiceDef(slug: "anna", display: "Anna", spd: "", effect: "none", basePitch: 0,
@@ -224,7 +232,20 @@ let NEURAL_VOICES: [ClassicVoiceDef] = {
 #endif
 }()
 
+/// IBM ProTALKER 97 Japanese voices (読み秀君 and 読み子ちゃん): IBM's 32-bit Tts_mgr.dll running in SAPI4/emu
+/// (Engine/protalker + cvp_bridge.c), data ProTalkerVoice. Picker section "IBM ProTALKER 97". Slugs "protalk_hide"
+/// and "protalk_ko" are permanent.
+let PROTALKER_VOICES: [ClassicVoiceDef] = [
+    proTalkerVoice("protalk_hide", "読み秀君 (ProTALKER)", voice: "ProTalker_Hide", female: false),
+    proTalkerVoice("protalk_ko",   "読み子ちゃん (ProTALKER)", voice: "ProTalker_Ko",   female: true),
+]
+
 enum VoiceCatalog {
+    /// Voices whose model data is present on disk, in catalog order.
+    static var availableVoices: [ClassicVoiceDef] {
+        CLASSIC_VOICES.filter { ClassicEngine.shared.isVoiceAvailable($0) }
+    }
+
     static func def(forIdentifier id: String) -> ClassicVoiceDef {
         let slug = id.split(separator: ".").last.map(String.init) ?? ""
         return CLASSIC_VOICES.first(where: { $0.slug == slug }) ?? CLASSIC_VOICES[0]
@@ -235,6 +256,7 @@ enum VoiceCatalog {
         def.display.replacingOccurrences(of: " (SAPI 5)", with: "")
             .replacingOccurrences(of: " (SAPI 4)", with: "")
             .replacingOccurrences(of: " (TruVoice)", with: "")
+            .replacingOccurrences(of: " (ProTALKER)", with: "")
     }
 
     /// Display names used by more than one voice of this app (must stay empty; make ssml-test checks it).

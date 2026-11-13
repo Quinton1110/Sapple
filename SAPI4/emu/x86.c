@@ -10,7 +10,19 @@
 #include <string.h>
 #include <fenv.h>
 #include <stdlib.h>
+#ifdef _WIN32
+#define MAP_FAILED ((void *)-1)
+#define PROT_READ 1
+#define PROT_WRITE 2
+#define MAP_PRIVATE 2
+#define MAP_ANON 0x1000
+static inline void *emu_mmap_anon(size_t len) { void *p = calloc(1, len); return p ? p : MAP_FAILED; }
+static inline void emu_munmap_anon(void *p, size_t len) { (void)len; if (p && p != MAP_FAILED) free(p); }
+#else
 #include <sys/mman.h>
+static inline void *emu_mmap_anon(size_t len) { return mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); }
+static inline void emu_munmap_anon(void *p, size_t len) { if (p && p != MAP_FAILED) munmap(p, len); }
+#endif
 
 #define R c->s.r
 #define EIP c->s.eip
@@ -967,7 +979,7 @@ enum {
 int x86_set_code_cache(X86 *c, uint32_t base, uint32_t size) {
     x86_free_code_cache(c);
     if (!size || base < X86_LOW_LIMIT || (uint64_t)base + size > c->mem_size) return -1;
-    void *p = mmap(NULL, (size_t)size * sizeof(X86DInsn), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    void *p = emu_mmap_anon((size_t)size * sizeof(X86DInsn));
     if (p == MAP_FAILED) return -1;
     c->dcache = p;
     c->dc_base = base;
@@ -976,7 +988,7 @@ int x86_set_code_cache(X86 *c, uint32_t base, uint32_t size) {
 }
 
 void x86_free_code_cache(X86 *c) {
-    if (c->dcache) munmap(c->dcache, (size_t)c->dc_size * sizeof(X86DInsn));
+    if (c->dcache) emu_munmap_anon(c->dcache, (size_t)c->dc_size * sizeof(X86DInsn));
     c->dcache = NULL;
     c->dc_base = c->dc_size = 0;
 }

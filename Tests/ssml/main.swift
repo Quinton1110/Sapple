@@ -228,9 +228,14 @@ func runParse() {
     for n in 1...8 { oldSlugs.append("truvoice_adult_male_\(n)") }
     oldSlugs += ["truvoice_adult_female_1", "truvoice_adult_female_2"]
     check(CLASSIC_VOICES.map(\.slug).prefix(oldSlugs.count).elementsEqual(oldSlugs)
-          && CLASSIC_VOICES.dropFirst(oldSlugs.count).allSatisfy { $0.engine == .neural },
-          "every earlier slug unchanged and in the same order (\(oldSlugs.count)), the neural voices after them")
-    print("     voices: \(CLASSIC_VOICES.count); neural: \(NEURAL_VOICES.map(\.display))")
+          && CLASSIC_VOICES.dropFirst(oldSlugs.count).allSatisfy { $0.engine == .neural || $0.engine == .protalker },
+          "every earlier slug unchanged and in the same order (\(oldSlugs.count)), the neural and ProTALKER voices after them")
+    check(PROTALKER_VOICES.map(\.slug) == ["protalk_hide", "protalk_ko"]
+          && name("protalk_hide") == "読み秀君 (ProTALKER)" && name("protalk_ko") == "読み子ちゃん (ProTALKER)"
+          && VoiceCatalog.shortName(PROTALKER_VOICES[0]) == "読み秀君"
+          && VoiceCatalog.shortName(PROTALKER_VOICES[1]) == "読み子ちゃん",
+          "ProTALKER 97 Japanese voices: slugs, display names and short names")
+    print("     voices: \(CLASSIC_VOICES.count); neural: \(NEURAL_VOICES.map(\.display)); protalker: \(PROTALKER_VOICES.map(\.display))")
 }
 
 // MARK: - render

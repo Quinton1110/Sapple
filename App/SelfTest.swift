@@ -44,8 +44,9 @@ enum SelfTest {
         : onlyAnna ? annaCases : neuralCases + annaCases + truvoiceCases + sapi4Cases + sapi5Cases + pauseCases
     /// the voices the in-process engine pass covers
     private static var engineVoices: [ClassicVoiceDef] {
-        onlySAPI5 ? [] : onlyTruVoice ? TRUVOICE_VOICES : onlyAnna ? [ANNA_VOICE] : onlyNeural ? NEURAL_VOICES
-            : NEURAL_VOICES + [ANNA_VOICE] + TRUVOICE_VOICES + SAPI4_VOICES
+        let pt = PROTALKER_VOICES.filter { ClassicEngine.shared.isVoiceAvailable($0) }
+        return onlySAPI5 ? [] : onlyTruVoice ? TRUVOICE_VOICES : onlyAnna ? [ANNA_VOICE] : onlyNeural ? NEURAL_VOICES
+            : NEURAL_VOICES + [ANNA_VOICE] + TRUVOICE_VOICES + SAPI4_VOICES + pt
     }
 
     /// The neural voices (Microsoft's embedded Speech SDK, cvn_bridge): every voice once with the ~5 s sentence (rtf=),
@@ -271,8 +272,10 @@ enum SelfTest {
     }
 
     private static func engineCheck() {
-        let text = "The quick brown fox jumps over the lazy dog, and then it runs away into the forest."
         for v in engineVoices {
+            let text = v.engine == .protalker
+                ? "こんにちは。今日はとてもいい天気ですね。これから音声合成のテストを行います。"
+                : "The quick brown fox jumps over the lazy dog, and then it runs away into the forest."
             // cold: opening the engine + the first utterance; firstAudio = the call to its first PCM
             ClassicEngine.shared.releaseIdle()
             let mem0 = footprintMB()
