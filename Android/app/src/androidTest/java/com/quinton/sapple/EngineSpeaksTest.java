@@ -72,6 +72,41 @@ public class EngineSpeaksTest {
         assertTrue("at least one voice had data", spoken > 0);
     }
 
+    /** TalkBack's way in: a language, no voice. The engine must answer with the voice chosen in the app. */
+    @Test
+    public void languageRequestSpeaksWithTheChosenVoice() throws Exception {
+        Context ctx = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        VoiceData data = new VoiceData(ctx);
+        Voices.Def chosen = SappleTtsService.chosenVoice(ctx, data);
+        org.junit.Assume.assumeTrue("no voice data", chosen != null);
+        CountDownLatch ready = new CountDownLatch(1);
+        TextToSpeech[] tts = new TextToSpeech[1];
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() ->
+                tts[0] = new TextToSpeech(ctx, s -> ready.countDown(), "com.quinton.sapple"));
+        assertTrue(ready.await(20, TimeUnit.SECONDS));
+        int lang = tts[0].setLanguage(java.util.Locale.US);
+        assertTrue("en-US available: " + lang, lang >= TextToSpeech.LANG_AVAILABLE);
+        assertEquals(chosen.slug, tts[0].getVoice().getName());
+        File out = new File(new File(ctx.getFilesDir(), "tts-test"), "language-request.wav");
+        out.getParentFile().mkdirs();
+        out.delete();
+        CountDownLatch done = new CountDownLatch(1);
+        boolean[] ok = {false};
+        tts[0].setOnUtteranceProgressListener(new UtteranceProgressListener() {
+            @Override public void onStart(String id) {}
+            @Override public void onDone(String id) { ok[0] = true; done.countDown(); }
+            @Override public void onError(String id) { done.countDown(); }
+        });
+        android.os.Bundle params = new android.os.Bundle();
+        params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1f);
+        tts[0].setSpeechRate(2.5f);   // screen-reader speed
+        tts[0].synthesizeToFile("Double tap to activate. Settings, button.", params, out, "lang");
+        assertTrue(done.await(60, TimeUnit.SECONDS));
+        assertTrue(ok[0]);
+        assertTrue("not silent", rms(out) > 300);
+        tts[0].shutdown();
+    }
+
     private static double rms(File wav) throws Exception {
         try (RandomAccessFile f = new RandomAccessFile(wav, "r")) {
             f.seek(44);
