@@ -33,5 +33,8 @@ public class ImportTest {
         }
         assertEquals(VoiceData.FOLDERS.length, folders);
         assertEquals(Voices.ALL.size() - (Engine.nativeHasTruVoice() ? 0 : 10), data.availableCount());
+        String report = Diagnostics.report(ctx, data);
+        org.junit.Assert.assertTrue(report, report.contains("Natural: 7 of 7"));
+        org.junit.Assert.assertTrue(report, report.contains("Speech SDK for the natural voices: present"));
     }
 }

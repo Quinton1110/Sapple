@@ -12,12 +12,13 @@
 #include "cv4n_bridge.h"
 #include "cva_bridge.h"
 #include "cvo_bridge.h"
+#include "cvn_bridge.h"
 #if SAPPLE_HAVE_TRUVOICE
 #include "cvt_bridge.h"
 #endif
 
 /* Must match Engine.java. */
-enum { K_SAPI5 = 0, K_SAPI4 = 1, K_TRUVOICE = 2, K_ANNA = 3, K_ONECORE = 4 };
+enum { K_SAPI5 = 0, K_SAPI4 = 1, K_TRUVOICE = 2, K_ANNA = 3, K_ONECORE = 4, K_NEURAL = 5 };
 
 typedef struct {
     int kind;
@@ -105,10 +106,41 @@ JNIEXPORT jlong JNICALL Java_com_quinton_sapple_Engine_nativeOpen(JNIEnv *env, j
 #endif
         case K_ANNA: cva_voice_close(v); break;
         case K_ONECORE: cvo_voice_close(v); break;
+        case K_NEURAL: cvn_voice_close(v); break;
         }
         return 0;
     }
     h->kind = kind;
+    h->v = v;
+    return (jlong)(intptr_t)h;
+}
+
+/* The Windows 11 natural voices (Microsoft's embedded Speech SDK, cvn_bridge.h). sdkDir: the app's native library
+ * folder, where the SDK's .so files are. dataDir: the imported NeuralVoices folder. onecoreDir: the imported
+ * OneCoreVoice folder (the language data both families share). workDir: a writable folder for the bridge's links. */
+JNIEXPORT jlong JNICALL Java_com_quinton_sapple_Engine_nativeOpenNeural(JNIEnv *env, jclass cls, jstring jsdk,
+                                                                          jstring jdata, jstring jonecore,
+                                                                          jstring jwork, jstring jname,
+                                                                          jobjectArray jerr) {
+    char err[256] = {0};
+    const char *sdk = chars(env, jsdk), *data = chars(env, jdata), *onecore = chars(env, jonecore),
+               *work = chars(env, jwork), *name = chars(env, jname);
+    cvn_voice *v = cvn_voice_open(sdk, data, onecore, work, name, err, sizeof err);
+    release(env, jsdk, sdk);
+    release(env, jdata, data);
+    release(env, jonecore, onecore);
+    release(env, jwork, work);
+    release(env, jname, name);
+    handle *h = v ? malloc(sizeof *h) : NULL;
+    if (!h) {
+        if (v) cvn_voice_close(v);
+        else if (jerr && (*env)->GetArrayLength(env, jerr) > 0) {
+            jstring s = (*env)->NewStringUTF(env, err[0] ? err : "could not open the voice");
+            (*env)->SetObjectArrayElement(env, jerr, 0, s);
+        }
+        return 0;
+    }
+    h->kind = K_NEURAL;
     h->v = v;
     return (jlong)(intptr_t)h;
 }
@@ -124,6 +156,7 @@ JNIEXPORT void JNICALL Java_com_quinton_sapple_Engine_nativeClose(JNIEnv *env, j
 #endif
     case K_ANNA: cva_voice_close(h->v); break;
     case K_ONECORE: cvo_voice_close(h->v); break;
+    case K_NEURAL: cvn_voice_close(h->v); break;
     }
     free(h);
 }
@@ -158,6 +191,7 @@ JNIEXPORT jint JNICALL Java_com_quinton_sapple_Engine_nativeSpeak(JNIEnv *env, j
         cvo_voice_set_emotion(h->v, emotion ? emotion : "");
         rc = cvo_voice_speak(h->v, text, rate, semitones, 1, on_pcm, &c);
         break;
+    case K_NEURAL: rc = cvn_voice_speak(h->v, text, rate, semitones, 1, on_pcm, &c); break;
     }
     release(env, jtext, text);
     release(env, jemotion, emotion);

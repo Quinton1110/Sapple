@@ -26,7 +26,8 @@ import java.util.concurrent.TimeUnit;
 @RunWith(AndroidJUnit4.class)
 public class EngineSpeaksTest {
     private static final String[] VOICES = {"sam", "mike_hall", "sapi4_mary", "anna", "onecore_david",
-            "onecore_zira_happy", "onecore_hazel", "onecore_eva", "truvoice_adult_male_1"};
+            "onecore_zira_happy", "onecore_hazel", "onecore_eva", "truvoice_adult_male_1", "jack", "neural_jenny",
+            "neural_sonia", "neural_prabhat"};
 
     @Test
     public void everyEngineSpeaks() throws Exception {

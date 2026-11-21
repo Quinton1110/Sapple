@@ -71,6 +71,7 @@ public class MainActivity extends Activity {
 
         col.addView(button(R.string.open_tts_settings, v -> openTtsSettings()));
         col.addView(button(R.string.remove_voices, v -> confirmRemove()));
+        col.addView(button(R.string.copy_diagnostics, v -> copyDiagnostics()));
 
         ScrollView scroll = new ScrollView(this);
         scroll.addView(col);
@@ -82,6 +83,15 @@ public class MainActivity extends Activity {
     protected void onPause() {
         super.onPause();
         stopPreview();
+    }
+
+    private void copyDiagnostics() {
+        android.content.ClipboardManager cm =
+                (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (cm == null) return;
+        cm.setPrimaryClip(android.content.ClipData.newPlainText(getString(R.string.copy_diagnostics),
+                                                                Diagnostics.report(this, data)));
+        status.setText(R.string.diagnostics_copied);
     }
 
     private Button button(int label, View.OnClickListener l) {

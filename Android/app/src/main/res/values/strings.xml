@@ -23,4 +23,6 @@
     <string name="open_tts_settings">Open text-to-speech settings</string>
     <string name="remove_voices">Remove all voices</string>
     <string name="remove_confirm">Remove every imported voice from this phone? You can import them again later.</string>
+    <string name="copy_diagnostics">Copy diagnostics</string>
+    <string name="diagnostics_copied">Diagnostics copied. Paste them into your bug report. They list the app and Android versions and which voices are on this phone, nothing you had spoken.</string>
 </resources>

@@ -19,12 +19,27 @@ import java.util.zip.ZipInputStream;
  *  holding those folders. TruVoice is the exception: its tables are compiled into the engine, so whether TruVoice is
  *  there depends on the build (see CMakeLists.txt). */
 final class VoiceData {
-    static final String[] FOLDERS = {"VoiceData", "SAPI4Voices", "AnnaVoice", "OneCoreVoice"};
+    static final String[] FOLDERS = {"VoiceData", "SAPI4Voices", "AnnaVoice", "OneCoreVoice", "NeuralVoices"};
 
     private final File root;
+    private final String sdkDir;
+    private final File neuralWork;
 
     VoiceData(Context ctx) {
         root = new File(ctx.getFilesDir(), "voices");
+        // Microsoft's Speech SDK libraries are packaged with the app and extracted (see build.gradle.kts), so they
+        // have a real path the neural bridge can dlopen.
+        sdkDir = ctx.getApplicationInfo().nativeLibraryDir;
+        neuralWork = new File(ctx.getNoBackupFilesDir(), "neural-links");
+    }
+
+    String sdkDir() { return sdkDir; }
+
+    String neuralWorkDir() { return neuralWork.getPath(); }
+
+    /** Whether Microsoft's Speech SDK is in this build (the natural voices need it as well as their data). */
+    boolean hasSdk() {
+        return new File(sdkDir, "libMicrosoft.CognitiveServices.Speech.core.so").isFile();
     }
 
     String dirFor(int engine) {
@@ -33,6 +48,7 @@ final class VoiceData {
             case Engine.SAPI4: return new File(root, "SAPI4Voices").getPath();
             case Engine.ANNA: return new File(root, "AnnaVoice").getPath();
             case Engine.ONECORE: return new File(root, "OneCoreVoice").getPath();
+            case Engine.NEURAL: return new File(root, "NeuralVoices").getPath();
             default: return root.getPath();
         }
     }
@@ -44,6 +60,11 @@ final class VoiceData {
             case Engine.SAPI4: return new File(dirFor(d.engine), "msttssyn.dll").isFile();
             case Engine.ANNA: return new File(dirFor(d.engine), "M1033DSK.KEY").isFile();
             case Engine.TRUVOICE: return Engine.nativeHasTruVoice();
+            case Engine.NEURAL:
+                // The voice's folder, the model key, and the OneCore language data it shares.
+                return hasSdk() && new File(new File(dirFor(d.engine), d.name), "Tokens.xml").isFile()
+                        && new File(dirFor(d.engine), "model.key").isFile()
+                        && new File(dirFor(Engine.ONECORE), "MSTTSLocEnUS.dat").isFile();
             case Engine.ONECORE: {
                 // The voice's own files are M<language id><Name>.* (M1033David.APM, M2057Hazel.APM ...).
                 String[] names = new File(dirFor(d.engine)).list();

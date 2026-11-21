@@ -17,7 +17,8 @@ set(BRIDGE_SRC
     "${ROOT}/Shared/Bridge/cv_resample.c"
     "${ROOT}/Shared/Bridge/cv4n_bridge.c"
     "${ROOT}/Shared/Bridge/cva_bridge.c"
-    "${ROOT}/Shared/Bridge/cvo_bridge.c")
+    "${ROOT}/Shared/Bridge/cvo_bridge.c"
+    "${ROOT}/Shared/Bridge/cvn_bridge.c")
 
 set_source_files_properties(${SAM_SRC} PROPERTIES COMPILE_OPTIONS "-std=c99;-w")
 set_source_files_properties(${BRIDGE_SRC} PROPERTIES COMPILE_OPTIONS "-std=c99")
@@ -50,6 +51,7 @@ target_compile_definitions(sapple PRIVATE CV_NO_DEBUG_ENV=1 SAPPLE_HAVE_TRUVOICE
 target_include_directories(sapple PRIVATE
     "${ROOT}/Engine/sam" "${ROOT}/Shared/Bridge" "${ROOT}/Engine/sapi4/lib" "${ROOT}/Engine/sapi4/src"
     "${ROOT}/Engine/sapi4/port" "${ROOT}/Engine/anna" "${ROOT}/Engine/onecore" "${ROOT}/Engine/opentv/include")
-target_link_libraries(sapple PRIVATE m log)
+# dl: the neural bridge loads Microsoft's Speech SDK at run time; nothing of the SDK is linked here.
+target_link_libraries(sapple PRIVATE m log dl)
 # 16 KB pages (Android 15+ devices)
 target_link_options(sapple PRIVATE "-Wl,-z,max-page-size=16384")

@@ -6,7 +6,7 @@ import java.util.List;
 /** The Java side of the C engines: a small pool of voice handles, as in ClassicEngine.swift. Handles are not
  *  reentrant, so every utterance checks one out and returns it afterwards; a few stay warm for the next one. */
 final class Engine {
-    static final int SAPI5 = 0, SAPI4 = 1, TRUVOICE = 2, ANNA = 3, ONECORE = 4;   // must match sapple_jni.c
+    static final int SAPI5 = 0, SAPI4 = 1, TRUVOICE = 2, ANNA = 3, ONECORE = 4, NEURAL = 5;   // must match sapple_jni.c
     static final int SAMPLE_RATE = 22050;
 
     static {
@@ -16,6 +16,8 @@ final class Engine {
     static native boolean nativeHasTruVoice();
     private static native long nativeOpen(int kind, String dataDir, String name, String effect, double basePitch,
                                           String[] err);
+    private static native long nativeOpenNeural(String sdkDir, String dataDir, String onecoreDir, String workDir,
+                                                String name, String[] err);
     private static native void nativeClose(long handle);
     private static native int nativeSpeak(long handle, String text, double sapiRate, double semitones, String emotion,
                                           PcmSink sink, byte[] buf);
@@ -39,10 +41,16 @@ final class Engine {
     static int speak(VoiceData data, Voices.Def def, String text, double sapiRate, double semitones, int chunkBytes,
                      PcmSink sink, String[] err) {
         long h = checkout(data, def, err);
-        if (h == 0) return -1;
+        if (h == 0) {
+            Diagnostics.recordFailure(def, err != null && err.length > 0 ? err[0] : null);
+            return -1;
+        }
         byte[] buf = new byte[Math.max(2, chunkBytes & ~1)];
         int rc = nativeSpeak(h, text, sapiRate, semitones, def.emotion, sink, buf);
-        if (rc < 0) nativeClose(h);   // a failed handle is never handed out again (as on iOS)
+        if (rc < 0) {
+            nativeClose(h);
+            Diagnostics.recordFailure(def, "the voice stopped with an error while speaking");
+        }   // a failed handle is never handed out again (as on iOS)
         else checkin(def, h);
         return rc;
     }
@@ -53,6 +61,10 @@ final class Engine {
             for (int i = idle.size() - 1; i >= 0; i--) {
                 if (idle.get(i).key.equals(key)) return idle.remove(i).handle;
             }
+        }
+        if (def.engine == NEURAL) {
+            return nativeOpenNeural(data.sdkDir(), data.dirFor(NEURAL), data.dirFor(ONECORE), data.neuralWorkDir(),
+                                    def.name, err);
         }
         return nativeOpen(def.engine, data.dirFor(def.engine), def.name, def.effect, def.basePitch, err);
     }

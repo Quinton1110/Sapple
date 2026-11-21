@@ -5,8 +5,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 
-/** The voice catalog: the same voices, slugs and names as Shared/Voices.swift, minus the neural voices (they run on
- *  Microsoft's embedded Speech SDK, which this build does not include). Keep the two lists in step. */
+/** The voice catalog: the same voices, slugs and names as Shared/Voices.swift. Keep the two lists in step. */
 final class Voices {
     static final class Def {
         final String slug, display;
@@ -70,6 +69,12 @@ final class Voices {
         v.add(sapi5("robosoft6", "RoboSoft Six (SAPI 5)", "Sam", "robosoft6", 100, false));
         v.add(sapi5("male_whisper", "Male Whisper (SAPI 5)", "Mike", "whisper", 0, false));
         v.add(sapi5("female_whisper", "Female Whisper (SAPI 5)", "Mary", "whisper", 0, true));
+        v.add(sapi5("betty", "Betty (SAPI 5)", "Mary", "none", 110, true));
+        v.add(sapi5("beverly", "Beverly (SAPI 5)", "Mary", "none", 100, true));
+        v.add(sapi5("brutus", "Brutus (SAPI 5)", "Mike", "none", 100, false));
+        v.add(sapi5("freddy", "Freddy (SAPI 5)", "Mike", "none", 189, false));
+        v.add(sapi5("jack", "Jack (SAPI 5)", "Sam", "none", 110, false));
+        v.add(sapi5("junior", "Junior (SAPI 5)", "Sam", "none", 189, false));
 
         v.add(new Def("anna", "Anna", Engine.ANNA, "", "none", 0, "", true, "en-US"));
 
@@ -122,6 +127,14 @@ final class Voices {
         v.add(truVoice("truvoice_adult_male_8", "Alex", "Adult Male #8", false));
         v.add(truVoice("truvoice_adult_female_1", "Wanda", "Adult Female #1", true));
         v.add(truVoice("truvoice_adult_female_2", "Julia", "Adult Female #2", true));
+        // The Windows 11 natural voices, on Microsoft's embedded Speech SDK (cvn_bridge.h).
+        String[][] neural = {{"Jenny", "f", "en-US"}, {"Aria", "f", "en-US"}, {"Guy", "m", "en-US"},
+                             {"Sonia", "f", "en-GB"}, {"Ryan", "m", "en-GB"},
+                             {"Neerja", "f", "en-IN"}, {"Prabhat", "m", "en-IN"}};
+        for (String[] n : neural) {
+            v.add(new Def("neural_" + n[0].toLowerCase(Locale.ROOT), n[0], Engine.NEURAL, n[0], "none", 0, "",
+                          n[1].equals("f"), n[2]));
+        }
         ALL = Collections.unmodifiableList(v);
     }
 
