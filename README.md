@@ -111,6 +111,7 @@ Engine/       the engines, vendored from their upstream projects, with our patch
 SAPI4/        an x86 interpreter that runs the original SAPI 4 DLLs, kept as the reference for testing
 Tests/        SSML and pause tests
 tools/        data staging, hash checks, table and patch generators
+Android/      the Android text-to-speech engine: the same engines over JNI (see Android/README.md)
 ```
 
 ## About the voices
