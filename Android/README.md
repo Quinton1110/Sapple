@@ -49,4 +49,4 @@ adb push Sapple-1.1.1.ipa /data/local/tmp/sapple-import.zip
 
 Note that `connectedDebugAndroidTest` uninstalls the app afterwards. To keep the rendered WAVs (`files/tts-test` in the app's storage), install both APKs and run `adb shell am instrument -w com.quinton.sapple.test/androidx.test.runner.AndroidJUnitRunner` instead.
 
-Tested on the Android 16 emulator (arm64). Both the iPhone and Mac downloads imported all 71 voices. One voice from each engine was rendered, and Whisper transcribed every rendering correctly. It hasn't been tried on a real phone with TalkBack yet.
+Tested on the Android 16 emulator (arm64). Both the iPhone and Mac downloads imported all 71 voices. One voice from each engine was rendered, and Whisper transcribed every rendering correctly. The same tests pass on a Pixel 9 Pro running Android 17, including the language-only request TalkBack makes. It hasn't been tried with TalkBack speaking yet.
