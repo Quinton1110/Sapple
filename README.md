@@ -42,7 +42,7 @@ Sideloadly (quick one time install):
 
 With a free Apple ID the app stops working after 7 days and has to be reinstalled. A paid Apple Developer account keeps it running for a year.
 
-On the Mac, the download is signed and notarized. Unzip it, put Sapple in Applications and open it once so macOS picks up the voices. Leave it there, since macOS finds the voices through the app. The Mac app needs an Apple Silicon Mac; it does not run on an Intel Mac. From the first version with automatic updates on, the Mac app updates itself: it checks while it is open and, through a small Sapple Updates login item, while it is closed, and it always asks before installing. How often it checks and whether it checks at all are in the Sapple menu, under Updates: Check Automatically, Also Check When Sapple Is Closed, and Update Frequency (every hour, 6 hours, day or week).
+On the Mac, the download is signed and notarized. Unzip it, put Sapple in Applications and open it once so macOS picks up the voices. Leave it there, since macOS finds the voices through the app. The Mac app needs an Apple Silicon Mac; it does not run on an Intel Mac. From the first version with automatic updates on, the Mac app updates itself: it checks while it is open and, through a small Sapple Updates login item, while it is closed, and it always asks before installing. How often it checks and whether it checks at all are in the Sapple menu, under Updates: Check Now, Check Automatically, Also Check When Sapple Is Closed, and Update Frequency (every hour, 6 hours, day or week).
 
 ## Picking the voices
 
