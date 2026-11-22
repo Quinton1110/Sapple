@@ -2,7 +2,9 @@
 // that expects to have been installed fills it by running its own DllRegisterServer (what the
 // installer's regsvr32 step did), then reads back what it wrote.
 #include "emu_internal.h"
+#ifndef _WIN32
 #include <strings.h>
+#endif
 
 #define A(i) x86_arg(c, (i))
 

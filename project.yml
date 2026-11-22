@@ -25,6 +25,8 @@ settings:
       - "$(SRCROOT)/Engine/anna"
       - "$(SRCROOT)/Engine/onecore"
       - "$(SRCROOT)/Engine/opentv/include"
+      - "$(SRCROOT)/Engine/protalker"
+      - "$(SRCROOT)/SAPI4/emu"
     SWIFT_OBJC_BRIDGING_HEADER: Shared/Bridge/ClassicVoices-Bridging-Header.h
 
 # The sources are identical on iOS and macOS: one app target and one AVSpeechSynthesisProvider
@@ -72,6 +74,12 @@ targetTemplates:
         excludes: ["LICENSE", "NOTICE", "src/engine.fields"]
         compilerFlags: ["-w", "-std=gnu11", "-O2", "-fwrapv", "-fno-strict-aliasing", "-I$(SRCROOT)/Engine/opentv/src",
                         "-I$(SRCROOT)/Engine/opentv/generated"]
+      # IBM ProTALKER 97 Japanese engine (Tts_mgr.dll in SAPI4/emu); data (ProTalkerVoice) is bundled in the extension only.
+      - path: Engine/protalker
+        compilerFlags: ["-w", "-std=gnu11", "-O2"]
+      - path: SAPI4/emu
+        excludes: ["sapi4_tts.c", "sapi4_tts.h", "sapi4_speak.c", "lockstep.c"]
+        compilerFlags: ["-w", "-std=gnu11", "-O2"]
       # TruVoice's tables (Centigram's - voice data: gitignored on main / mac, force-added on the full branches), as the
       # assembly data image `make truvoice-data` generates from the pinned upstream's data/en/engine.tvdata.
       - path: TruVoiceData
@@ -117,6 +125,12 @@ targetTemplates:
         excludes: ["LICENSE", "NOTICE", "src/engine.fields"]
         compilerFlags: ["-w", "-std=gnu11", "-O2", "-fwrapv", "-fno-strict-aliasing", "-I$(SRCROOT)/Engine/opentv/src",
                         "-I$(SRCROOT)/Engine/opentv/generated"]
+      # IBM ProTALKER 97 Japanese engine (Tts_mgr.dll in SAPI4/emu); data (ProTalkerVoice) is bundled in the extension only.
+      - path: Engine/protalker
+        compilerFlags: ["-w", "-std=gnu11", "-O2"]
+      - path: SAPI4/emu
+        excludes: ["sapi4_tts.c", "sapi4_tts.h", "sapi4_speak.c", "lockstep.c"]
+        compilerFlags: ["-w", "-std=gnu11", "-O2"]
       - path: TruVoiceData
         buildPhase: sources   # xcodegen would copy a .s as a resource
       - path: VoiceData
@@ -138,6 +152,11 @@ targetTemplates:
       # code-only branches, never redistributed; staged and hash-checked by tools/neural_stage.py / `make neural-data`), 29 MB.
       # They share the en-US language data and most domain files with OneCoreVoice (cvn_bridge.c links them).
       - path: NeuralVoices
+        type: folder
+        buildPhase: resources
+      # IBM ProTALKER 97 Japanese engine and voice data (Tts_mgr.dll, DICT/, UNIT/; gitignored except README so builds
+      # without the optional Japanese voice files succeed out of the box; never redistributed).
+      - path: ProTalkerVoice
         type: folder
         buildPhase: resources
     settings:

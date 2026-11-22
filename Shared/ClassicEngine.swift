@@ -45,6 +45,7 @@ final class ClassicEngine {
         case anna(OpaquePointer)
         case onecore(OpaquePointer)
         case neural(OpaquePointer)
+        case protalker(OpaquePointer)
     }
 
     private let lock = NSLock()
@@ -105,6 +106,9 @@ final class ClassicEngine {
     /// like OneCoreVoice; the app reads that copy.
     let neuralDataDir: String = ClassicEngine.extensionResource("NeuralVoices", probe: "model.key")
 
+    /// ProTalkerVoice: IBM ProTALKER 97's Tts_mgr.dll, DICT/ and UNIT/ (IBM's, not in git). Bundled in the extension only.
+    let proTalkerDataDir: String = ClassicEngine.extensionResource("ProTalkerVoice", probe: "Tts_mgr.dll")
+
     /// The Speech SDK's three dylibs: embedded (and signed) in the extension's Frameworks folder. The app loads the
     /// extension's copy; the Mac test harness (CV_DATA_ROOT) the staged NeuralSDK/macos.
     let neuralSDKDir: String = {
@@ -136,18 +140,56 @@ final class ClassicEngine {
     /// A data folder bundled in the extension only: the extension finds it in its own resources, the app inside the
     /// extension in its PlugIns folder (the appex lays out resources per platform, so every place is tried).
     private static func extensionResource(_ name: String, probe: String) -> String {
-        let fm = FileManager.default
         var candidates = [resourcesURL.appendingPathComponent(name)]
         if let plugIns = ownBundle.builtInPlugInsURL {
             let appex = plugIns.appendingPathComponent("ClassicVoicesExtension.appex")
             candidates.append(appex.appendingPathComponent("Contents/Resources/" + name))   // macOS
             candidates.append(appex.appendingPathComponent(name))                          // iOS
         }
-        for c in candidates where fm.fileExists(atPath: c.appendingPathComponent(probe).path) { return c.path }
+        for c in candidates where hasFile(probe, in: c.path) { return c.path }
         return candidates[0].path
     }
 
     private init() {}
+
+    /// Case-insensitive file lookup inside `dir` (so VoiceData works whether staged as `Sam.spd` or `SAM.SPD`).
+    private static func hasFile(_ name: String, in dir: String) -> Bool {
+        let fm = FileManager.default
+        let exact = (dir as NSString).appendingPathComponent(name)
+        if fm.fileExists(atPath: exact) { return true }
+        let target = name.lowercased()
+        return (try? fm.contentsOfDirectory(atPath: dir))?.contains(where: { $0.lowercased() == target }) == true
+    }
+
+    /// Whether `def`'s voice data is present on disk, so uninstalled voices never appear in VoiceOver or the picker.
+    func isVoiceAvailable(_ def: ClassicVoiceDef) -> Bool {
+        let fm = FileManager.default
+        switch def.engine {
+        case .sapi5:
+            return Self.hasFile(def.spd + ".spd", in: dataDir) &&
+                   Self.hasFile(def.spd + ".sdf", in: dataDir) &&
+                   Self.hasFile("LTTS1033.LXA", in: dataDir) &&
+                   Self.hasFile("r1033tts.LXA", in: dataDir)
+        case .sapi4:
+            return Self.hasFile("msttssyn.dll", in: sapi4DataDir)
+        case .truvoice:
+            return true
+        case .anna:
+            return Self.hasFile("M1033DSK.KEY", in: annaDataDir) &&
+                   Self.hasFile("M1033DSK.APM", in: annaDataDir)
+        case .onecore:
+            let suffix = def.oneCoreVoice.lowercased() + ".ini"
+            return (try? fm.contentsOfDirectory(atPath: oneCoreDataDir))?
+                .contains(where: { $0.lowercased().hasSuffix(suffix) }) == true
+        case .neural:
+            let core = (neuralSDKDir as NSString).appendingPathComponent("libMicrosoft.CognitiveServices.Speech.core.dylib")
+            guard let sz = (try? fm.attributesOfItem(atPath: core)[.size]) as? UInt64, sz > 131072 else { return false }
+            return fm.fileExists(atPath: (neuralDataDir as NSString).appendingPathComponent("model.key")) &&
+                   fm.fileExists(atPath: (neuralDataDir as NSString).appendingPathComponent(def.neuralVoice))
+        case .protalker:
+            return cvp_voice_has_data(proTalkerDataDir) != 0
+        }
+    }
 
     /// Handles are pooled per engine instance: a OneCore voice's emotion presets share one handle (the emotion is
     /// a per-utterance setting), every other voice pools by its slug.
@@ -181,6 +223,8 @@ final class ClassicEngine {
         case .neural:
             return cvn_voice_open(neuralSDKDir, neuralDataDir, oneCoreDataDir, neuralWorkDir, def.neuralVoice, &err,
                                   err.count).map { .neural($0) }
+        case .protalker:
+            return cvp_voice_open(proTalkerDataDir, def.proTalkerVoice, &err, err.count).map { .protalker($0) }
         }
     }
 
@@ -216,6 +260,7 @@ final class ClassicEngine {
         case .anna(let p): cva_voice_close(p)
         case .onecore(let p): cvo_voice_close(p)
         case .neural(let p): cvn_voice_close(p)
+        case .protalker(let p): cvp_voice_close(p)
         }
     }
 
@@ -264,6 +309,7 @@ final class ClassicEngine {
                     _ = cvo_voice_set_emotion(p, def.emotion)   // "" = the voice's normal speech
                     return cvo_voice_speak(p, cText, sapiRate, semitones, trim, Self.onPCM, ctx)
                 case .neural(let p): return cvn_voice_speak(p, cText, sapiRate, semitones, trim, Self.onPCM, ctx)
+                case .protalker(let p): return cvp_voice_speak(p, cText, sapiRate, semitones, trim, Self.onPCM, ctx)
                 }
             }
         }
@@ -277,6 +323,8 @@ final class ClassicEngine {
             close(h)            // OneCore: likewise
         } else if rc < 0, case .neural = h {
             close(h)            // neural: likewise (cvn_bridge also rebuilds its engine)
+        } else if rc < 0, case .protalker = h {
+            close(h)            // ProTALKER: likewise
         } else {
             checkin(def, h)
         }
@@ -296,6 +344,7 @@ final class ClassicEngine {
         case .sapi4: return min(f, 3.0)
         case .truvoice: return min(f, 250.0 / 150.0)
         case .neural: return cvn_speed_factor(sapiRate)   // 1/3x .. 3x: the engine's prosody-rate limits
+        case .protalker: return cvp_speed_factor(sapiRate) // 0.80x .. 5.95x: Tts_mgr.dll's speed steps 4..16
         }
     }
 
@@ -425,7 +474,7 @@ final class ClassicEngine {
         var out: [Int16] = []
         let collect: (UnsafeBufferPointer<Int16>) -> Bool = { buf in out.append(contentsOf: buf); return true }
         let rc: Int32
-        if def.engine == .neural {
+        if def.engine == .neural || def.engine == .protalker {
             // As under VoiceOver (SSML.segments lineBreaks): each line its own engine call, the boundary pause between.
             let lines = text.split(whereSeparator: \.isNewline)
                 .map { $0.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)

@@ -11,6 +11,8 @@ OneCoreVoice/
 TruVoiceData/
 NeuralVoices/
 NeuralSDK/
+ProTalkerVoice/*
+!ProTalkerVoice/README
 _installers/
 
 # Microsoft SAPI 5 voice data (Sam, Mike, Mary)
@@ -46,6 +48,14 @@ SAPI4/build/
 *.MSI
 *.lex
 *.dic
+*.DCT
+*.IND
+*.RUL
+*.GDS
+*.TBL
+*.MR2
+*.PHN
+*.PMK
 
 # Microsoft Anna (Windows Vista / 7) data and the Windows images it comes from
 M1033DSK.*
