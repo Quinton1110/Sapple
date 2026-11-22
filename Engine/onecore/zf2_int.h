@@ -18,13 +18,14 @@ extern const uint32_t z2_phone_flags[Z2_MAXPH];
 /* ClassicVoices patch: the phone set is per voice (zf2_voice.ps).  Default: the built-in en-US table above; zira_tts
  * replaces it with the language data's own (zf2_voice_set_phoneset), which for MSTTSLocEnUS.dat is identical.
  * en-GB (MSTTSLocEnGB.dat) has 49 phones, no -SP-, and its stress / tone marks are ids 4 / 5 instead of 5 / 6. */
-#define Z2_PS_MAX 64
+#define Z2_PS_MAX 128
 typedef struct {
     char name[Z2_PS_MAX][24];   /* "" = no phone with that id */
     uint32_t flags[Z2_PS_MAX];
     int sil;                    /* id of -SIL- (3 in both) */
     int st1;                    /* id of the stress mark '1' */
     int sp;                     /* id of -SP-, -1 if the set has none */
+    int t1;                     /* id of first tone mark 'T1' (flag 0x80000000), -1 if none */
 } z2_phoneset;
 int z2_phone_id(const z2_phoneset *ps, const char *name, int len);       /* -1 unknown */
 

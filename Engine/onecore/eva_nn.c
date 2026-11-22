@@ -200,6 +200,13 @@ static int lstm_init(EvaLayer *l, const uint8_t *h) {
                  h + rd32(h + 0x30))) return -1;
     if (lin_init(&l->P, ptype, h + rd32(h + 0x58), rd16(h + 0x5c), (const uint8_t *)zeros, l->cell, l->out,
                  h + rd32(h + 0x28))) return -1;
+    if (gtype == EVA_LIN_INT16) {
+        l->U.wdeq = rdf(h + 0x3c) * 3.05180438e-5f;
+        l->V.wdeq = rdf(h + 0x34) * 3.05180438e-5f;
+    }
+    if (ptype == EVA_LIN_INT16) {
+        l->P.wdeq = rdf(h + 0x2c) * 3.05180438e-5f;
+    }
     l->peep_i = (const float *)(h + rd32(h + 0x60));
     l->peep_f = (const float *)(h + rd32(h + 0x64));
     l->peep_o = (const float *)(h + rd32(h + 0x68));

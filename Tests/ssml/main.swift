@@ -220,7 +220,22 @@ func runParse() {
                  "onecore_eva_angry", "onecore_sarah"]
     // 2026-09-29 / 30: the new OneCore voices go last in ONECORE_VOICES, before the SAPI 4 voices. Slugs are what
     // VoiceOver stores (VoiceCatalog.def(forIdentifier:) matches by slug); the in-app picker index is not persisted.
-    oldSlugs += ["onecore_catherine", "onecore_james", "onecore_linda", "onecore_richard", "onecore_matilda"]
+    oldSlugs += ["onecore_catherine", "onecore_james", "onecore_linda", "onecore_richard", "onecore_matilda",
+                 "onecore_eva_ca", "onecore_sean", "onecore_heera", "onecore_koyal", "onecore_ravi",
+                 "onecore_naayf", "onecore_hoda", "onecore_ivan", "onecore_herena", "onecore_jakub", "onecore_helle",
+                 "onecore_michael", "onecore_karsten", "onecore_hedda", "onecore_katja", "onecore_katjav2", "onecore_stefan",
+                 "onecore_stefanos", "onecore_ana_es", "onecore_helena", "onecore_laura", "onecore_pablo",
+                 "onecore_mila", "onecore_raul", "onecore_sabina", "onecore_heidi",
+                 "onecore_caroline", "onecore_claude", "onecore_nathalie_ca",
+                 "onecore_hortense", "onecore_julie", "onecore_nathalie", "onecore_paul", "onecore_guillaume",
+                 "onecore_asaf", "onecore_hemant", "onecore_kalpana", "onecore_matej", "onecore_szabolcs", "onecore_andika",
+                 "onecore_cosimo", "onecore_elsa", "onecore_elsav2",
+                 "onecore_ayumi", "onecore_haruka", "onecore_ichiro", "onecore_sayaka",
+                 "onecore_heami", "onecore_rizwan", "onecore_jon", "onecore_bart", "onecore_frank",
+                 "onecore_adam", "onecore_paulina", "onecore_ana_br", "onecore_daniel", "onecore_maria", "onecore_helia",
+                 "onecore_andrei", "onecore_irina", "onecore_pavel", "onecore_filip", "onecore_lado", "onecore_bengt",
+                 "onecore_valluvar", "onecore_pattara", "onecore_tolga", "onecore_an",
+                 "onecore_hongyu", "onecore_huihui", "onecore_kangkang", "onecore_yaoyao", "onecore_danny", "onecore_tracy"]
     let sapi4Modes: [String] = ["sam", "mike", "mary", "mike_telephone", "mary_telephone", "mike_hall", "mike_stadium",
                                 "mike_space", "mary_hall", "mary_stadium", "mary_space", "robosoft1", "robosoft2", "robosoft3",
                                 "robosoft4", "robosoft5", "robosoft6", "male_whisper", "female_whisper"]

@@ -106,7 +106,7 @@ int zf1_pron_init(zf1_pron *p, const zf1_dat *d, const zf1_lex *lx, const zf1_ph
     p->sylmark = (uint16_t)zf1_phone_id(ps, "-", 1);
     p->sep = (uint16_t)zf1_phone_id(ps, "&", 1);
     p->morph = zf1_morph_create(d, lx, ps);
-    zf1_pron_load_domains(p, "C:\\Windows\\Speech_OneCore\\Engines\\TTS\\en-US\\");
+    /* domain files are loaded per locale in zf1_modules_init */
     r = zf1_dat_get(d, 0x19a6569a, 0xea8d0701, &n);            /* COMPOUNDPRON network */
     if (r) {
         p->compound = zf1_net_load(r, n);
@@ -115,7 +115,7 @@ int zf1_pron_init(zf1_pron *p, const zf1_dat *d, const zf1_lex *lx, const zf1_ph
             if (getenv("ZF1_CPN_LEX")) zf1_net_set_lexicon((zf1_net *)p->compound, zf1_pron_netlex_cb, p);
         }
     }
-    return p->have_cart ? 0 : -1;
+    return 0;
 }
 
 int zf1_pron_load_domains(zf1_pron *p, const char *dir) { return zf1_pron_load_domains_lcid(p, dir, 1033); }
@@ -139,7 +139,7 @@ int zf1_pron_load_domains_lcid(zf1_pron *p, const char *dir, int lcid)
         snprintf(p->dom[k].name, sizeof p->dom[k].name, "%s", loc[i].domain);
         p->ndom++;
     }
-    if (nloc) return p->ndom;
+    if (nloc || lcid != 1033) return p->ndom;
     for (i = 0; i < 6 && p->ndom < 8; i++) {
         char path[1024];
         size_t n;

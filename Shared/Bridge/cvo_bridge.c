@@ -11,16 +11,25 @@
 
 struct cvo_voice {
     zira_tts *t;
+    int lcid;
     cv_resampler rs;   /* 16000 -> 22050 */
 };
+
+static int is_english_lcid(int lcid)
+{
+    return lcid == 1033 || lcid == 2057 || lcid == 3081 || lcid == 4105 || lcid == 6153 || lcid == 16393;
+}
+
+int cvo_voice_has_data(const char *dir, const char *voice)
+{
+    return dir && *dir && voice && *voice && zira_tts_voice_has_data(dir, voice);
+}
 
 cvo_voice *cvo_voice_open(const char *dir, const char *voice, char *err, size_t errlen)
 {
     cvo_voice *v;
-    if (!voice || (strcmp(voice, "David") && strcmp(voice, "Zira") && strcmp(voice, "Mark") && strcmp(voice, "Hazel") &&
-                   strcmp(voice, "George") && strcmp(voice, "Susan") && strcmp(voice, "Eva") &&
-                   strcmp(voice, "Sarah") && strcmp(voice, "Catherine") && strcmp(voice, "James") &&
-                   strcmp(voice, "Linda") && strcmp(voice, "Richard") && strcmp(voice, "Matilda"))) {
+    int lcid = voice ? zira_tts_voice_lcid(voice) : 0;
+    if (!lcid) {
         if (err && errlen) snprintf(err, errlen, "unknown OneCore voice");
         return NULL;
     }
@@ -30,6 +39,7 @@ cvo_voice *cvo_voice_open(const char *dir, const char *voice, char *err, size_t 
     }
     v = calloc(1, sizeof *v);
     if (!v) return NULL;
+    v->lcid = lcid;
     v->t = zira_tts_open(dir, voice, err, errlen);
     if (!v->t) {
         free(v);
@@ -105,7 +115,7 @@ int cvo_voice_speak(cvo_voice *v, const char *utf8, double sapi_rate, double sem
     zira_callbacks cb;
     int rc;
     if (!v || !utf8 || !fn) return -1;
-    clean = cv_sanitize_alloc(utf8);
+    clean = is_english_lcid(v->lcid) ? cv_sanitize_alloc(utf8) : cv_sanitize_unicode_alloc(utf8);
     if (!clean) return -1;
     if (!*clean) { /* nothing speakable: no audio, and never any stand-in text */
         free(clean);

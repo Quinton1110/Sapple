@@ -27,6 +27,8 @@ typedef struct cvo_voice cvo_voice;
 cvo_voice *cvo_voice_open(const char *data_dir, const char *voice, char *err, size_t errlen);
 void cvo_voice_close(cvo_voice *v);
 int cvo_voice_sample_rate(const cvo_voice *v); /* 22050 */
+/* 1 if voice is a known OneCore voice whose model and locale files are staged in data_dir, else 0. */
+int cvo_voice_has_data(const char *data_dir, const char *voice);
 
 /* The emotion for the next speak calls: "happy", "sad", "angry", or NULL / "" for the voice's normal speech.
  * Returns 0, or -1 if the voice has no such emotion (then it speaks neutrally). */
