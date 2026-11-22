@@ -25,6 +25,10 @@ final class UpdateChecker: NSObject, NSApplicationDelegate, SPUUpdaterDelegate, 
     static let showUpdateURL = URL(string: "sapple-updates:check")!
     static let appGroup = "ZGJQ5DZFK2.com.quinton.classicvoices"
     static let skippedBuildKey = "updates.skippedBuild"
+    static let checkIntervalKey = "updates.checkInterval"   // seconds, set by the app's "How often to check for updates" picker
+    /// Posted by the app when the interval changes (a Darwin notification: sandboxed processes may use names that start
+    /// with their app group).
+    static let checkIntervalChanged = "ZGJQ5DZFK2.com.quinton.classicvoices.checkIntervalChanged"
 
     private var updater: SPUUpdater?
     private let center = UNUserNotificationCenter.current()
@@ -54,6 +58,8 @@ final class UpdateChecker: NSObject, NSApplicationDelegate, SPUUpdaterDelegate, 
         do {
             try updater.start()
             self.updater = updater
+            applyCheckInterval()
+            watchCheckInterval()
             NSLog("SappleUpdateChecker: checking %@ %@ (build %@), every %.0f s, automatic %@",
                   app.bundlePath, app.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?",
                   app.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?",
@@ -61,6 +67,30 @@ final class UpdateChecker: NSObject, NSApplicationDelegate, SPUUpdaterDelegate, 
         } catch {
             NSLog("SappleUpdateChecker: Sparkle did not start: %@", "\(error)")
         }
+    }
+
+    // MARK: How often (the app's "How often to check for updates" picker)
+
+    /// The app's interval, from the app group, on this updater: Sparkle stores it and reschedules the next check
+    /// (from the last one), so a change in the app takes effect here at once, no restart or logout needed.
+    private func applyCheckInterval() {
+        guard let updater, let value = UserDefaults(suiteName: Self.appGroup)?.object(forKey: Self.checkIntervalKey) as? Double,
+              value >= 3600, abs(value - updater.updateCheckInterval) > 0.5 else { return }
+        updater.updateCheckInterval = value
+        updater.resetUpdateCycleAfterShortDelay()
+        NSLog("SappleUpdateChecker: check interval now %.0f s", value)
+    }
+
+    /// The app posts checkIntervalChanged after writing the new value (key-value observing of the app group's
+    /// defaults does not report another process's change); Sparkle's scheduling and the hourly look in
+    /// watchForReplacement() read it again as fallbacks.
+    private func watchCheckInterval() {
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), Unmanaged.passUnretained(self).toOpaque(),
+                                        { _, observer, _, _, _ in
+            guard let observer else { return }
+            let me = Unmanaged<UpdateChecker>.fromOpaque(observer).takeUnretainedValue()
+            DispatchQueue.main.async { me.applyCheckInterval() }
+        }, Self.checkIntervalChanged as CFString, nil, .deliverImmediately)
     }
 
     // MARK: After an update
@@ -87,7 +117,10 @@ final class UpdateChecker: NSObject, NSApplicationDelegate, SPUUpdaterDelegate, 
             src.resume()
             watcher = src
         }
-        hourly = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in self?.exitIfReplaced() }
+        hourly = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
+            self?.exitIfReplaced()
+            self?.applyCheckInterval()
+        }
         hourly?.tolerance = 600
     }
 

@@ -9,6 +9,9 @@
 //    notification; opening the notification opens this app (sapple-updates:check), which shows Sparkle's
 //    standard update window. The helper never downloads or installs anything. After an update it notices its app was
 //    replaced and exits; launchd starts the new one (UpdateChecker.swift).
+//  - How often both check is the Updates section's "How often to check for updates" picker (every hour, 6 hours, day - the
+//    default - or week): the app's Sparkle setting, mirrored through the app group (UpdateFeed.checkIntervalKey)
+//    for the helper, which applies it as soon as it changes.
 //  - The feed is SUFeedURL in Info-macOS.plist; every update is checked against SUPublicEDKey (EdDSA). Builds made
 //    with CV_SPARKLE_TEST (never a release) read a local test feed instead (UpdateFeed.testURL).
 //  - The app is sandboxed: Sparkle installs through the installer XPC service inside Sparkle.framework
@@ -33,6 +36,17 @@ enum UpdateFeed {
     /// The Mac app group (App-macOS.entitlements, the singing switch's): where "Skip This Version" is shared with the helper.
     static let appGroup = "ZGJQ5DZFK2.com.quinton.classicvoices"
     static let skippedBuildKey = "updates.skippedBuild"
+    /// How often to check, in seconds (Quinton, 2026-11-21: "Why not just have the check be configurable?"): the app's
+    /// Sparkle setting, mirrored here in the app group for the helper, which applies it at once.
+    static let checkIntervalKey = "updates.checkInterval"
+    /// Posted after the interval changes, so a running helper applies it at once (a Darwin notification, named with the
+    /// app group, which sandboxed processes may use; key-value observing of the app group's defaults does not report
+    /// another process's change, measured 2026-11-21).
+    static let checkIntervalChanged = "ZGJQ5DZFK2.com.quinton.classicvoices.checkIntervalChanged"
+    /// The choices; Sparkle 2.10.1 never checks more often than once an hour (SPUUpdaterSettings.minimumUpdateCheckInterval).
+    static let intervals: [(seconds: Double, title: String)] = [
+        (3600, "Every hour"), (6 * 3600, "Every 6 hours"), (86400, "Every day"), (7 * 86400, "Every week")]
+    static let defaultInterval: Double = 86400   // SUScheduledCheckInterval in Info-macOS.plist
 #if CV_SPARKLE_TEST
     /// Test builds only (CV_SPARKLE_TEST): a feed served on this Mac.
     static let testURL = "http://127.0.0.1:8766/appcast.xml"
@@ -47,6 +61,7 @@ final class AppUpdates: NSObject, ObservableObject, SPUUpdaterDelegate {
     @Published private(set) var automaticChecks = true
     @Published private(set) var backgroundChecks = false
     @Published private(set) var backgroundStatus = ""
+    @Published private(set) var checkInterval: Double = UpdateFeed.defaultInterval
 
     private var controller: SPUStandardUpdaterController!
     private var observers: [AnyCancellable] = []
@@ -77,7 +92,27 @@ final class AppUpdates: NSObject, ObservableObject, SPUUpdaterDelegate {
         // test builds only: -cvBackgroundChecks on|off does what the switch does (tests drive it without the UI)
         if let arg = defaults.string(forKey: "cvBackgroundChecks") { setBackgroundChecks(arg == "on") }
 #endif
+        // the helper reads the interval from the app group: keep it equal to the app's own
+        checkInterval = updater.updateCheckInterval
+        UserDefaults(suiteName: UpdateFeed.appGroup)?.set(checkInterval, forKey: UpdateFeed.checkIntervalKey)
+#if CV_SPARKLE_TEST
+        // test builds only: -cvCheckInterval <seconds> does what the picker does
+        if defaults.object(forKey: "cvCheckInterval") != nil { setCheckInterval(defaults.double(forKey: "cvCheckInterval")) }
+#endif
+        NSLog("SappleUpdates: check interval %.0f s", controller.updater.updateCheckInterval)
         refreshBackgroundStatus()
+    }
+
+    /// "How often to check for updates": for the app and the background checker alike. Sparkle reschedules the app's
+    /// next check itself; the helper sees the app-group value change and does the same.
+    func setCheckInterval(_ seconds: Double) {
+        let s = max(seconds, 3600)   // Sparkle's minimum (it would round anything shorter up to an hour anyway)
+        controller.updater.updateCheckInterval = s
+        checkInterval = s
+        UserDefaults(suiteName: UpdateFeed.appGroup)?.set(s, forKey: UpdateFeed.checkIntervalKey)
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                             CFNotificationName(UpdateFeed.checkIntervalChanged as CFString), nil, nil, true)
+        NSLog("SappleUpdates: check interval set to %.0f s", s)
     }
 
     /// "Check for Updates..." (the app menu and the Updates section).
@@ -164,6 +199,13 @@ struct UpdatesSection: View {
         Section("Updates") {
             Toggle("Check for updates automatically", isOn: Binding(
                 get: { updates.automaticChecks }, set: { updates.setAutomaticChecks($0) }))
+            Picker("How often to check for updates", selection: Binding(
+                get: { UpdateFeed.intervals.contains { $0.seconds == updates.checkInterval } ? updates.checkInterval
+                                                                                              : UpdateFeed.defaultInterval },
+                set: { updates.setCheckInterval($0) })) {
+                ForEach(UpdateFeed.intervals, id: \.seconds) { Text($0.title).tag($0.seconds) }
+            }
+            .disabled(!updates.automaticChecks)
             Toggle("Also check when Sapple is closed", isOn: Binding(
                 get: { updates.backgroundChecks }, set: { updates.setBackgroundChecks($0) }))
                 .disabled(!updates.automaticChecks)
