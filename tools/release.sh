@@ -1,6 +1,6 @@
 #!/bin/bash
-# Builds and publishes a Sapple release: the iOS IPA, the notarized Mac zip, the AltStore / SideStore source and the
-# downloads page, in one go.
+# Builds and publishes a Sapple release: the iOS IPA, the notarized Mac zip, the AltStore / SideStore source, the Mac
+# app's Sparkle appcast and the downloads page, in one go.
 #
 #   tools/release.sh VERSION "What's new" [--dry-run] [--skip-build] [--yes]
 #   make release VERSION=1.1 NOTES="What's new"          (add DRYRUN=1 for a dry run)
@@ -19,14 +19,20 @@
 #      project.yml or the source, in project.yml.
 #   3. Builds the iOS app unsigned, ad-hoc signs app and extension WITH their entitlements (so AltStore sees the app
 #      group), zips Payload/ into Sapple-VERSION.ipa.
-#   4. Builds the Mac app (Developer ID, arm64), checks its entitlements, notarizes, staples, zips Sapple-VERSION-mac.zip.
+#   4. Builds the Mac app (Developer ID, arm64), checks its entitlements and its Sparkle parts (helpers Developer ID signed
+#      with the hardened runtime, one Sparkle.framework, no test feed), notarizes, staples, zips Sapple-VERSION-mac.zip.
 #   5. Reads the version and build back OUT of both built Info.plists and stops if they differ from what was asked for,
 #      so the source can never disagree with the app.
 #   6. Writes the new source.json (the new entry on top of `versions`; older entries and every other field kept) and the
-#      downloads page (links, sizes, versions, SHA-256), validates both.
-#   7. Backs up source.json and index.html on the server, uploads the IPA and zip (to temporary names, hash-checked, then
-#      renamed into place), then the source and the page the same way. Old IPAs stay, so older entries keep working.
-#   8. Fetches the public source.json and checks the new entry, then downloads the IPA and checks its size and SHA-256.
+#      downloads page (links, sizes, versions, SHA-256), validates both. Signs the Mac zip with Sparkle's sign_update
+#      (EdDSA; the key's public half must be the app's SUPublicEDKey) and puts a new item on top of appcast.xml
+#      (tools/release/appcast.py: version, build, length, signature, minimum macOS, the same notes; older items kept).
+#   7. Backs up source.json, index.html and appcast.xml (if there is one) on the server, uploads the IPA and zip (to
+#      temporary names, hash-checked, then renamed into place), then the source, the appcast and the page the same way.
+#      Old IPAs stay, so older entries keep working.
+#   8. Fetches the public source.json and checks the new entry, then downloads the IPA and checks its size and SHA-256;
+#      fetches the public appcast.xml and checks its newest item, downloads the Mac zip and checks its size, SHA-256 and
+#      Sparkle signature. Installed Sparkle-enabled Mac copies find the update from the appcast.
 #   9. Updates the download links in README.md. Commit project.yml and README.md afterwards.
 #
 # Settings come from tools/release.local (gitignored; see the list below) or the environment:
@@ -37,8 +43,13 @@
 #   NOTARY_KEY          path to the App Store Connect API key (.p8) used for notarization
 #   NOTARY_KEY_ID       its key ID
 #   NOTARY_ISSUER       its issuer ID
+#   SPARKLE_KEY_FILE    the Sparkle EdDSA private key exported with `generate_keys --account sapple -x <file>`
+#                       (a file, not the keychain: reading the keychain item asks for the login password every time)
+#   SPARKLE_BIN         folder holding Sparkle's sign_update (default: the Swift package's own, from the Mac build,
+#                       so it is the version project.yml pins)
 #
-# Not done yet (future step): Sparkle updates for the Mac app. Mac users download the new zip from the page.
+# Mac updates: Sparkle 2 (App/Updates.swift, UpdateChecker/). The feed is appcast.xml next to source.json; the app's
+# Info-macOS.plist names it (SUFeedURL) and the key (SUPublicEDKey).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -65,6 +76,9 @@ done
 : "${RELEASE_DIR:?set RELEASE_DIR in tools/release.local}"
 : "${RELEASE_URL:?set RELEASE_URL in tools/release.local}"
 RELEASE_BACKUP_DIR="${RELEASE_BACKUP_DIR:-sapple-backups}"
+: "${SPARKLE_KEY_FILE:?set SPARKLE_KEY_FILE in tools/release.local}"
+SPARKLE_BIN="${SPARKLE_BIN:-build/release/mac-dd/SourcePackages/artifacts/sparkle/Sparkle/bin}"
+APPCAST="appcast.xml"
 case "$RELEASE_URL" in */) ;; *) RELEASE_URL="$RELEASE_URL/" ;; esac
 
 OUT="build/release/$VERSION"
@@ -85,7 +99,8 @@ done
 if [ $DRY = 0 ] && [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   die "tracked files have uncommitted changes; commit or stash them first (git status)"
 fi
-for t in xcodegen xcodebuild python3 ditto codesign curl; do command -v $t >/dev/null || die "$t not found"; done
+for t in xcodegen xcodebuild python3 ditto codesign curl openssl; do command -v $t >/dev/null || die "$t not found"; done
+[ -f "$SPARKLE_KEY_FILE" ] || die "SPARKLE_KEY_FILE $SPARKLE_KEY_FILE not found"
 if [ $DRY = 0 ]; then
   : "${NOTARY_KEY:?set NOTARY_KEY in tools/release.local}" "${NOTARY_KEY_ID:?}" "${NOTARY_ISSUER:?}"
   [ -f "$NOTARY_KEY" ] || die "NOTARY_KEY $NOTARY_KEY not found"
@@ -95,6 +110,9 @@ remote "test -d '$RELEASE_DIR' && test -f '$RELEASE_DIR/source.json' && test -f 
   || die "cannot reach $RELEASE_SSH:$RELEASE_DIR/{source.json,index.html}"
 remote "cat '$RELEASE_DIR/source.json'" > "$OUT/source.old.json"
 remote "cat '$RELEASE_DIR/index.html'" > "$OUT/index.old.html"
+# the appcast: none yet = the first Sparkle release (appcast.py starts one)
+: > "$OUT/appcast.old.xml"
+if remote "test -f '$RELEASE_DIR/$APPCAST'"; then remote "cat '$RELEASE_DIR/$APPCAST'" > "$OUT/appcast.old.xml"; fi
 
 NEWBUILD=$(python3 - "$OUT/source.old.json" "$VERSION" <<'EOF'
 import json, re, sys
@@ -164,6 +182,27 @@ else
   if codesign -d --entitlements - "$MACAPP" 2>/dev/null | grep -q get-task-allow; then
     die "Mac app carries get-task-allow; the notary service would reject it"
   fi
+  # Sparkle: every nested helper Developer ID signed with the hardened runtime (tools/sparkle-sign.sh), the background
+  # checker inside, one Sparkle.framework, the downloader allowed the network, and no test feed (CV_SPARKLE_TEST)
+  SPF="$MACAPP/Contents/Frameworks/Sparkle.framework"
+  CHECKER="$MACAPP/Contents/Library/LoginItems/Sapple Updates.app"
+  for c in "$SPF/Versions/B/Autoupdate" "$SPF/Versions/B/Updater.app" "$SPF/Versions/B/XPCServices/Installer.xpc" \
+           "$SPF/Versions/B/XPCServices/Downloader.xpc" "$SPF" "$CHECKER"; do
+    sig=$(codesign -dvv "$c" 2>&1 || true)   # captured first: grep -q closing the pipe early fails it under pipefail
+    grep -q "^Authority=Developer ID Application" <<<"$sig" || die "$c is not Developer ID signed"
+    grep -q "flags=.*runtime" <<<"$sig" || die "$c lacks the hardened runtime"
+  done
+  ent=$(codesign -d --entitlements - "$SPF/Versions/B/XPCServices/Downloader.xpc" 2>&1 || true)
+  grep -q "com.apple.security.network.client" <<<"$ent" || die "Sparkle's Downloader.xpc lacks its network entitlement"
+  [ ! -e "$CHECKER/Contents/Frameworks/Sparkle.framework" ] || die "the update checker carries its own Sparkle.framework"
+  # ...and its run path really reaches the app's (a wrong one only shows as a crash at launch)
+  CHECKER_EXE="$CHECKER/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$CHECKER/Contents/Info.plist")"
+  found=0
+  while read -r rp; do
+    case "$rp" in @executable_path/*) [ -f "$(dirname "$CHECKER_EXE")/${rp#@executable_path/}/Sparkle.framework/Versions/B/Sparkle" ] && found=1 ;; esac
+  done < <(otool -l "$CHECKER_EXE" | awk '/LC_RPATH/{getline; getline; print $2}')
+  [ $found = 1 ] || die "the update checker's run path does not reach Contents/Frameworks/Sparkle.framework"
+  if grep -rqa "127.0.0.1:8766" "$MACAPP/Contents/MacOS" "$CHECKER/Contents/MacOS"; then die "a test build (CV_SPARKLE_TEST)"; fi
   if [ $DRY = 1 ]; then
     say "dry run: not notarizing"
   else
@@ -201,7 +240,37 @@ EOF
 . "$OUT/built.env"
 say "built: version $BUILT_VERSION build $BUILT_BUILD (read from both Info.plists), iOS $MIN_IOS+"
 
-# ---------------------------------------------------------------------------------------------------- 6. source + page
+# ---------------------------------------------------------------------------------------------------- 6. Sparkle
+SIGN_UPDATE="$SPARKLE_BIN/sign_update"
+[ -x "$SIGN_UPDATE" ] || die "Sparkle's sign_update not found at $SIGN_UPDATE (set SPARKLE_BIN)"
+# the key must be the one the app checks against: its public half equals the built app's SUPublicEDKey
+APP_EDKEY=$(python3 - "$OUT/$MACZIP" <<'EOF'
+import plistlib, sys, zipfile
+print(plistlib.loads(zipfile.ZipFile(sys.argv[1]).read("Sapple.app/Contents/Info.plist")).get("SUPublicEDKey", ""))
+EOF
+)
+KEY_EDKEY=$(python3 - "$SPARKLE_KEY_FILE" <<'EOF'
+import base64, subprocess, sys
+seed = base64.b64decode(open(sys.argv[1]).read().strip())[:32]
+der = bytes.fromhex("302e020100300506032b657004220420") + seed      # PKCS#8 Ed25519 around the seed
+r = subprocess.run(["openssl", "pkey", "-inform", "DER", "-pubout", "-outform", "DER"], input=der, capture_output=True)
+print(base64.b64encode(r.stdout[-32:]).decode() if r.returncode == 0 else "")
+EOF
+)
+[ -n "$APP_EDKEY" ] && [ "$APP_EDKEY" = "$KEY_EDKEY" ] || die "SPARKLE_KEY_FILE is not the key the Mac app checks (SUPublicEDKey $APP_EDKEY)"
+MAC_EDSIG=$("$SIGN_UPDATE" --ed-key-file "$SPARKLE_KEY_FILE" -p "$OUT/$MACZIP") || die "sign_update failed"
+"$SIGN_UPDATE" --ed-key-file "$SPARKLE_KEY_FILE" --verify "$OUT/$MACZIP" "$MAC_EDSIG" >/dev/null 2>&1 || die "the Mac zip's signature does not verify"
+MAC_MINOS=$(python3 - "$OUT/$MACZIP" <<'EOF'
+import plistlib, sys, zipfile
+print(plistlib.loads(zipfile.ZipFile(sys.argv[1]).read("Sapple.app/Contents/Info.plist")).get("LSMinimumSystemVersion", "15.0"))
+EOF
+)
+python3 tools/release/appcast.py add "$OUT/appcast.old.xml" "$OUT/$APPCAST" --title Sapple --link "$RELEASE_URL" \
+  --version "$BUILT_VERSION" --build "$BUILT_BUILD" --url "${RELEASE_URL}$MACZIP" --length "$(stat -f %z "$OUT/$MACZIP")" \
+  --signature "$MAC_EDSIG" --min-os "$MAC_MINOS" --notes "$NOTES" || die "the appcast could not be written"
+say "Sparkle: Mac zip signed (key = the app's SUPublicEDKey), appcast item for build $BUILT_BUILD written"
+
+# ---------------------------------------------------------------------------------------------------- 7. source + page
 python3 - "$OUT" "$IPA" "$MACZIP" "$BUILT_VERSION" "$BUILT_BUILD" "$MIN_IOS" "$NOTES" "$RELEASE_URL" <<'EOF' || exit 1
 import datetime, hashlib, json, os, re, sys
 out, ipa, maczip, ver, build, minos, notes, url = sys.argv[1:]
@@ -262,11 +331,13 @@ EOF
 
 echo; echo "---- source.json changes"; diff "$OUT/source.old.json" "$OUT/source.json" || true
 echo "---- downloads page changes"; diff "$OUT/index.old.html" "$OUT/index.html" || true
+echo "---- appcast.xml changes"; diff "$OUT/appcast.old.xml" "$OUT/$APPCAST" || true
 cat <<EOF
 
 About to publish Sapple $VERSION (build $NEWBUILD) to $RELEASE_SSH:$RELEASE_DIR
   $IPA      $IPA_SIZE bytes  sha256 $IPA_SHA
   $MACZIP  $MAC_SIZE bytes  sha256 $MAC_SHA
+  source.json, $APPCAST, index.html
   What's new: $NOTES
   Public: ${RELEASE_URL}source.json
 EOF
@@ -279,10 +350,10 @@ if [ $YES = 0 ]; then
   [ "$ans" = y ] || [ "$ans" = Y ] || die "not published"
 fi
 
-# ---------------------------------------------------------------------------------------------------- 7. upload
+# ---------------------------------------------------------------------------------------------------- 8. upload
 STAMP=$(date +%Y%m%d-%H%M%S)
-say "backing up the live source.json and index.html to $RELEASE_BACKUP_DIR/ on the server"
-remote "mkdir -p $RELEASE_BACKUP_DIR && cp -p '$RELEASE_DIR/source.json' $RELEASE_BACKUP_DIR/source.json.$STAMP && cp -p '$RELEASE_DIR/index.html' $RELEASE_BACKUP_DIR/index.html.$STAMP"
+say "backing up the live source.json, index.html and $APPCAST to $RELEASE_BACKUP_DIR/ on the server"
+remote "mkdir -p $RELEASE_BACKUP_DIR && cp -p '$RELEASE_DIR/source.json' $RELEASE_BACKUP_DIR/source.json.$STAMP && cp -p '$RELEASE_DIR/index.html' $RELEASE_BACKUP_DIR/index.html.$STAMP && if [ -f '$RELEASE_DIR/$APPCAST' ]; then cp -p '$RELEASE_DIR/$APPCAST' $RELEASE_BACKUP_DIR/$APPCAST.$STAMP; fi"
 put() {  # put LOCAL NAME SHA256: upload to .NAME.tmp, check its hash, rename into place
   scp -q -o BatchMode=yes "$1" "$RELEASE_SSH:$RELEASE_DIR/.$2.tmp" || die "upload of $2 failed"
   remote "cd '$RELEASE_DIR' && echo '$3  .$2.tmp' | sha256sum -c --quiet - && chmod 644 '.$2.tmp' && mv -f '.$2.tmp' '$2'" \
@@ -293,9 +364,10 @@ say "uploading $IPA"; put "$OUT/$IPA" "$IPA" "$IPA_SHA"
 say "uploading $MACZIP"; put "$OUT/$MACZIP" "$MACZIP" "$MAC_SHA"
 say "uploading source.json and index.html"
 put "$OUT/source.json" source.json "$(hash_of "$OUT/source.json")"
+put "$OUT/$APPCAST" "$APPCAST" "$(hash_of "$OUT/$APPCAST")"
 put "$OUT/index.html" index.html "$(hash_of "$OUT/index.html")"
 
-# ---------------------------------------------------------------------------------------------------- 8. verify
+# ---------------------------------------------------------------------------------------------------- 9. verify
 say "verifying the public source and the IPA download"
 curl -fsS -H 'Cache-Control: no-cache' "${RELEASE_URL}source.json?v=$STAMP" -o "$OUT/source.live.json" || die "cannot fetch the public source.json"
 python3 - "$OUT/source.live.json" "$VERSION" "$NEWBUILD" "${RELEASE_URL}$IPA" "$IPA_SIZE" <<'EOF' || exit 1
@@ -311,9 +383,18 @@ curl -fsS "${RELEASE_URL}$IPA" -o "$OUT/downloaded.ipa" || die "cannot download 
 [ "$(hash_of "$OUT/downloaded.ipa")" = "$IPA_SHA" ] || die "downloaded IPA SHA-256 differs"
 rm -f "$OUT/downloaded.ipa"
 curl -fsS "${RELEASE_URL}" | grep -q "Download Sapple $VERSION for iPhone" || die "the downloads page does not show $VERSION"
-say "live: source.json lists $VERSION build $NEWBUILD; the IPA downloads with $IPA_SIZE bytes and the right SHA-256"
+curl -fsS -H 'Cache-Control: no-cache' "${RELEASE_URL}$APPCAST?v=$STAMP" -o "$OUT/appcast.live.xml" || die "cannot fetch the public $APPCAST"
+python3 tools/release/appcast.py check "$OUT/appcast.live.xml" --build "$NEWBUILD" --url "${RELEASE_URL}$MACZIP" \
+  --length "$MAC_SIZE" --signature "$MAC_EDSIG" || die "the public appcast is not right"
+curl -fsS "${RELEASE_URL}$MACZIP" -o "$OUT/downloaded-mac.zip" || die "cannot download ${RELEASE_URL}$MACZIP"
+[ "$(stat -f %z "$OUT/downloaded-mac.zip")" = "$MAC_SIZE" ] || die "downloaded Mac zip size differs"
+[ "$(hash_of "$OUT/downloaded-mac.zip")" = "$MAC_SHA" ] || die "downloaded Mac zip SHA-256 differs"
+"$SIGN_UPDATE" --ed-key-file "$SPARKLE_KEY_FILE" --verify "$OUT/downloaded-mac.zip" "$MAC_EDSIG" >/dev/null 2>&1 \
+  || die "the downloaded Mac zip's Sparkle signature does not verify"
+rm -f "$OUT/downloaded-mac.zip"
+say "live: source.json lists $VERSION build $NEWBUILD; the IPA downloads with $IPA_SIZE bytes and the right SHA-256; the appcast offers the Mac zip ($MAC_SIZE bytes), signed"
 
-# ---------------------------------------------------------------------------------------------------- 9. README
+# ---------------------------------------------------------------------------------------------------- 10. README
 if [ -f README.md ]; then
   sed -i '' -E "s/Sapple-[0-9.]+\.ipa/$IPA/g; s/Sapple-[0-9.]+-mac\.zip/$MACZIP/g" README.md
 fi
