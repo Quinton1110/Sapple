@@ -185,13 +185,16 @@ final class AppUpdates: NSObject, ObservableObject, SPUUpdaterDelegate {
     }
 }
 
-/// The app menu's "Check for Updates..." (after "About Sapple", where Mac apps put it).
+/// "Check for Updates...": in the app menu after "About Sapple" (where Mac apps put it), and again, as
+/// "Check Now", the first item of the Updates submenu.
 struct CheckForUpdatesCommand: View {
     @ObservedObject var updates: AppUpdates
+    var title = "Check for Updates\u{2026}"
+    var spoken = "Check for Updates"   // VoiceOver: the name without the ellipsis
     var body: some View {
-        Button("Check for Updates\u{2026}") { updates.checkForUpdates() }
+        Button(title) { updates.checkForUpdates() }
             .disabled(!updates.canCheckForUpdates)
-            .accessibilityLabel("Check for Updates")
+            .accessibilityLabel(spoken)
     }
 }
 
@@ -205,6 +208,10 @@ struct UpdatesMenu: View {
     @ObservedObject var updates: AppUpdates
     var body: some View {
         Menu("Updates") {
+            // the same item as "Check for Updates..." after About (his 22:46: "The check for updates button should also
+            // be in that menu."; 23:00: "...called check now"): one view, one action, enabled and disabled together
+            CheckForUpdatesCommand(updates: updates, title: "Check Now", spoken: "Check Now")
+            Divider()
             Toggle("Check Automatically", isOn: Binding(
                 get: { updates.automaticChecks }, set: { updates.setAutomaticChecks($0) }))
             Toggle("Also Check When Sapple Is Closed", isOn: Binding(
