@@ -83,7 +83,6 @@ struct ContentView: View {
                 // Always visible, whatever voice is picked (Quinton, 2026-09-25): applies to VoiceOver and the Play button.
                 Section {
                     Toggle("Enable singing mode for SAPI 5 voices", isOn: $singing.enabled)
-                        .accessibilityHint("Sam, Mike and Mary sing song scores they come across")
                     Slider(value: $singing.vibratoCents, in: 0...100, step: 5) {
                         Text("Vibrato depth")
                     } minimumValueLabel: {
@@ -117,11 +116,9 @@ struct ContentView: View {
                 } header: {
                     Text("Singing")
                 } footer: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("When on, Sam, Mike and Mary sing any song score they come across, such as twin-kle C4 1 C4 1, and speak everything else normally.")
-                        if !SingingMode.isShared {
-                            Text("This copy of the app has no shared app group, so VoiceOver cannot see the singing switch; the Play button still sings.")
-                        }
+                    // Only when something is wrong (Quinton, 2026-11-21: the help text and the hint went)
+                    if !SingingMode.isShared {
+                        Text("This copy of the app has no shared app group, so VoiceOver cannot see the singing switch; the Play button still sings.")
                     }
                 }
                 .onChange(of: singing) { _, new in SingingMode.save(new) }
