@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Sparkle's Downloader.xpc (Sparkle's own Downloader/Downloader.entitlements, 2.10.1): the one part of Sapple with
+	     network access; it fetches the appcast and the update for the app (SUEnableDownloaderService). The package
+	     ships it ad-hoc signed with no entitlements, so tools/sparkle-sign.sh signs it with these. -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+</dict>
+</plist>

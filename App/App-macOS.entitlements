@@ -14,5 +14,11 @@
 	<array>
 		<string>ZGJQ5DZFK2.com.quinton.classicvoices</string>
 	</array>
+	<!-- Sparkle's installer (sandboxed host): the installer launcher service talks to these two names. -->
+	<key>com.apple.security.temporary-exception.mach-lookup.global-name</key>
+	<array>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spks</string>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spki</string>
+	</array>
 </dict>
 </plist>

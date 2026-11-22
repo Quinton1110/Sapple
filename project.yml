@@ -30,6 +30,13 @@ settings:
 # The sources are identical on iOS and macOS: one app target and one AVSpeechSynthesisProvider
 # extension per platform, sharing every Swift and C file. Only the Info.plist, the entitlements and
 # a few platform build settings differ (see the concrete targets below).
+# Sparkle 2: the Mac app's updates (App/Updates.swift, UpdateChecker/). An EXACT version (a new one is a deliberate
+# change: its sign_update must match the one tools/release.sh signs with, from the same package's artifacts).
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.10.1
+
 targetTemplates:
   App:
     type: application
@@ -220,10 +227,61 @@ targets:
         CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
         # The app is the only place the appex can live; keep its name stable for annaDataDir.
         COMBINE_HIDPI_IMAGES: YES
+        ENABLE_USER_SCRIPT_SANDBOXING: NO     # tools/sparkle-sign.sh re-signs inside the built app
+    postBuildScripts:
+      - name: Sign Sparkle's helpers (Developer ID, hardened runtime)
+        script: '"$SRCROOT/tools/sparkle-sign.sh"'
+        basedOnDependencyAnalysis: false
+        # inputs, so Xcode runs it after Sparkle and the login item are in the app
+        inputFiles:
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Frameworks/Sparkle.framework"
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Library/LoginItems/Sapple Updates.app"
     dependencies:
       - target: ClassicVoicesExtension-macOS
         embed: true
         codeSign: true
+      - package: Sparkle
+      # the background update checker, a login item: Contents/Library/LoginItems/Sapple Updates.app
+      - target: SappleUpdates-macOS
+        embed: true
+        codeSign: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Library/LoginItems
+
+  # "Sapple Updates": checks for updates while the app is closed and posts a notification (UpdateChecker/).
+  # Uses the app's Sparkle.framework (../../../../../Frameworks), never the engines or the voice data.
+  SappleUpdates-macOS:
+    type: application
+    platform: macOS
+    sources:
+      - path: UpdateChecker
+        excludes: ["Info.plist", "UpdateChecker.entitlements"]
+    dependencies:
+      - package: Sparkle
+        embed: false
+    settings:
+      base:
+        ARCHS: arm64
+        PRODUCT_BUNDLE_IDENTIFIER: com.quinton.classicvoices.UpdateChecker
+        PRODUCT_NAME: "Sapple Updates"
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: UpdateChecker/Info.plist
+        CODE_SIGN_ENTITLEMENTS: UpdateChecker/UpdateChecker.entitlements
+        # The project-wide bridging header is the engines'; this target has no C
+        SWIFT_OBJC_BRIDGING_HEADER: ""
+        # Sapple.app/Contents/Library/LoginItems/X.app/Contents/MacOS/X -> Sapple.app/Contents/Frameworks
+        # (one level deeper than the extension in PlugIns: Library/LoginItems)
+        LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/../../../../../Frameworks"]
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "Developer ID Application"
+        PROVISIONING_PROFILE_SPECIFIER: ""
+        OTHER_CODE_SIGN_FLAGS: "$(inherited) --timestamp"
+        CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+        SKIP_INSTALL: YES
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+    # Xcode embeds Sparkle in this app too; the app's build removes that copy (tools/sparkle-sign.sh), one Sparkle ships
 
   ClassicVoicesExtension-macOS:
     templates: [Extension]

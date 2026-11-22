@@ -32,5 +32,37 @@
 	<true/>
 	<key>NSSupportsSuddenTermination</key>
 	<true/>
+	<!-- Sparkle 2 (App/Updates.swift). The feed and the EdDSA public key every update must be signed with
+	     (private key: the login keychain, account sapple, and its backup file; tools/release.sh signs with the file). -->
+	<key>SUFeedURL</key>
+	<string>https://quintonwilliams.me/sapple/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>l/2DcTCGOagn3CzY0HXiiOfUMJrsY9sTQQOe/WdmTqs=</string>
+	<!-- Checks without asking first, at launch when due and once a day while open; always asks before installing. -->
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<!-- Sandboxed: install through the installer XPC service inside Sparkle.framework. -->
+	<key>SUEnableInstallerLauncherService</key>
+	<true/>
+	<!-- The app has no network access of its own (Sapple works offline): the appcast and the update are fetched by the
+	     downloader XPC service inside Sparkle.framework, which has it. -->
+	<key>SUEnableDownloaderService</key>
+	<true/>
+	<!-- What the background checker's notification opens (UpdateChecker/, App/Updates.swift). -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.quinton.classicvoices.updates</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>sapple-updates</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

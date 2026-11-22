@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Sapple Updates</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Sapple Updates</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<!-- No window and no Dock icon: it only checks and posts a notification (UpdateChecker.swift). -->
+	<key>LSUIElement</key>
+	<true/>
+	<!-- Alerts, not banners, by default: an update notice stays on screen until it is opened or closed, so it can be
+	     found with VoiceOver (a banner is gone in seconds). The user can change it in System Settings, Notifications. -->
+	<key>NSUserNotificationAlertStyle</key>
+	<string>alert</string>
+	<!-- Never set SUEnableInstallerLauncherService here: this helper never installs (Sparkle reads that key from the
+	     RUNNING process's own Info.plist; the feed and the key come from the main app's). -->
+</dict>
+</plist>
