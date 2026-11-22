@@ -148,10 +148,6 @@ struct ContentView: View {
                         Text(status).font(.footnote).foregroundStyle(.secondary)
                     }
                 }
-
-#if os(macOS)
-                UpdatesSection(updates: AppUpdates.shared)
-#endif
             }
             .navigationTitle("Sapple")
         }

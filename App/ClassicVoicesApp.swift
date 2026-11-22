@@ -19,6 +19,7 @@ struct ClassicVoicesApp: App {
         .commands {
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesCommand(updates: AppUpdates.shared)
+                UpdatesMenu(updates: AppUpdates.shared)
             }
         }
 #endif

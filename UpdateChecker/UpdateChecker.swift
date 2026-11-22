@@ -25,7 +25,7 @@ final class UpdateChecker: NSObject, NSApplicationDelegate, SPUUpdaterDelegate, 
     static let showUpdateURL = URL(string: "sapple-updates:check")!
     static let appGroup = "ZGJQ5DZFK2.com.quinton.classicvoices"
     static let skippedBuildKey = "updates.skippedBuild"
-    static let checkIntervalKey = "updates.checkInterval"   // seconds, set by the app's "How often to check for updates" picker
+    static let checkIntervalKey = "updates.checkInterval"   // seconds, set by the app menu's Updates > Update Frequency
     /// Posted by the app when the interval changes (a Darwin notification: sandboxed processes may use names that start
     /// with their app group).
     static let checkIntervalChanged = "ZGJQ5DZFK2.com.quinton.classicvoices.checkIntervalChanged"
@@ -69,7 +69,7 @@ final class UpdateChecker: NSObject, NSApplicationDelegate, SPUUpdaterDelegate, 
         }
     }
 
-    // MARK: How often (the app's "How often to check for updates" picker)
+    // MARK: How often (the app menu's Updates > Update Frequency)
 
     /// The app's interval, from the app group, on this updater: Sparkle stores it and reschedules the next check
     /// (from the last one), so a change in the app takes effect here at once, no restart or logout needed.
