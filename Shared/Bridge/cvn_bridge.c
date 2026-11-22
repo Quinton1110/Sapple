@@ -56,17 +56,34 @@ typedef SPXHR (*fn_ds_status)(SPXH, int *);
 
 /* ---- the voices ---- */
 typedef struct {
-    const char *name, *locale, *ini, *engine_name;
+    const char *name, *locale, *ini, *loc_dat, *engine_name;
+    int needs_en_us;
 } nv_def;
 
 static const nv_def VOICES[] = {
-    {"Jenny", "en-US", "1033.INI", "Microsoft Jenny (Natural) - English (United States)"},
-    {"Aria", "en-US", "1033.INI", "Microsoft Aria (Natural) - English (United States)"},
-    {"Guy", "en-US", "1033.INI", "Microsoft Guy (Natural) - English (United States)"},
-    {"Sonia", "en-GB", "2057.INI", "Microsoft Sonia (Natural) - English (United Kingdom)"},
-    {"Ryan", "en-GB", "2057.INI", "Microsoft Ryan (Natural) - English (United Kingdom)"},
-    {"Neerja", "en-IN", "1081.INI", "Microsoft Neerja (Natural) - English (India)"},
-    {"Prabhat", "en-IN", "1081.INI", "Microsoft Prabhat (Natural) - English (India)"},
+    {"Jenny",     "en-US", "1033.INI", "MSTTSLocEnUS.dat", "Microsoft Jenny (Natural) - English (United States)", 0},
+    {"Aria",      "en-US", "1033.INI", "MSTTSLocEnUS.dat", "Microsoft Aria (Natural) - English (United States)", 0},
+    {"Guy",       "en-US", "1033.INI", "MSTTSLocEnUS.dat", "Microsoft Guy (Natural) - English (United States)", 0},
+    {"Sonia",     "en-GB", "2057.INI", "MSTTSLocEnGB.dat", "Microsoft Sonia (Natural) - English (United Kingdom)", 0},
+    {"Ryan",      "en-GB", "2057.INI", "MSTTSLocEnGB.dat", "Microsoft Ryan (Natural) - English (United Kingdom)", 0},
+    {"Neerja",    "en-IN", "1081.INI", "MSTTSLocEnIN.dat", "Microsoft Neerja (Natural) - English (India)", 0},
+    {"Prabhat",   "en-IN", "1081.INI", "MSTTSLocEnIN.dat", "Microsoft Prabhat (Natural) - English (India)", 0},
+    {"Nanami",    "ja-JP", "1041.INI", "MSTTSLocJaJP.dat", "Microsoft Nanami (Natural) - Japanese (Japan)", 0},
+    {"Keita",     "ja-JP", "1041.INI", "MSTTSLocJaJP.dat", "Microsoft Keita (Natural) - Japanese (Japan)", 0},
+    {"Xiaoxiao",  "zh-CN", "2052.INI", "MSTTSLocZhCN.dat", "Microsoft Xiaoxiao (Natural) - Chinese (Simplified, China)", 1},
+    {"Yunxi",     "zh-CN", "2052.INI", "MSTTSLocZhCN.dat", "Microsoft Yunxi (Natural) - Chinese (Simplified, China)", 1},
+    {"Katja",     "de-DE", "1031.INI", "MSTTSLocDeDE.dat", "Microsoft Katja (Natural) - German (Germany)", 1},
+    {"Conrad",    "de-DE", "1031.INI", "MSTTSLocDeDE.dat", "Microsoft Conrad (Natural) - German (Germany)", 0},
+    {"Elvira",    "es-ES", "3082.INI", "MSTTSLocEsES.dat", "Microsoft Elvira (Natural) - Spanish (Spain)", 1},
+    {"Alvaro",    "es-ES", "3082.INI", "MSTTSLocEsES.dat", "Microsoft Alvaro (Natural) - Spanish (Spain)", 1},
+    {"Dalia",     "es-MX", "2058.INI", "MSTTSLocEsMX.dat", "Microsoft Dalia (Natural) - Spanish (Mexico)", 1},
+    {"Jorge",     "es-MX", "2058.INI", "MSTTSLocEsMX.dat", "Microsoft Jorge (Natural) - Spanish (Mexico)", 1},
+    {"Denise",    "fr-FR", "1036.INI", "MSTTSLocFrFR.dat", "Microsoft Denise (Natural) - French (France)", 1},
+    {"Henri",     "fr-FR", "1036.INI", "MSTTSLocFrFR.dat", "Microsoft Henri (Natural) - French (France)", 1},
+    {"SunHi",     "ko-KR", "1042.INI", "MSTTSLocKoKR.dat", "Microsoft SunHi (Natural) - Korean (Korea)", 1},
+    {"InJoon",    "ko-KR", "1042.INI", "MSTTSLocKoKR.dat", "Microsoft InJoon (Natural) - Korean (Korea)", 1},
+    {"Francisca", "pt-BR", "1046.INI", "MSTTSLocPtBR.dat", "Microsoft Francisca (Natural) - Portuguese (Brazil)", 1},
+    {"Antonio",   "pt-BR", "1046.INI", "MSTTSLocPtBR.dat", "Microsoft Antonio (Natural) - Portuguese (Brazil)", 1},
 };
 #define NVOICES ((int)(sizeof VOICES / sizeof VOICES[0]))
 
@@ -296,10 +313,38 @@ static int prepare(int i, const char *data_dir, const char *onecore_dir, const c
             seterr(err, errlen, "missing en-GB language data for %s", v->name);
             return -1;
         }
-    } else { /* en-IN: MSTTSLocEnIN.dat and its four domain files, all in NeuralVoices/en-IN (OneCoreVoice has none) */
+    } else if (!strcmp(v->locale, "en-IN")) {
         snprintf(path, sizeof path, "%s/en-IN", data_dir);
         if (link_folder(G.work[i], path, NULL) < 5) {
             seterr(err, errlen, "missing en-IN language data for %s", v->name);
+            return -1;
+        }
+    } else {
+        snprintf(path, sizeof path, "%s/%s", data_dir, v->locale);
+        link_folder(G.work[i], path, NULL);
+        snprintf(path, sizeof path, "%s/%s", G.work[i], v->loc_dat);
+        if (access(path, R_OK)) {
+            seterr(err, errlen, "missing %s language data", v->locale);
+            return -1;
+        }
+        if (v->needs_en_us) {
+            snprintf(path, sizeof path, "%s/MSTTSLocEnUS.dat", G.work[i]);
+            if (access(path, R_OK)) {
+                snprintf(path, sizeof path, "%s/MSTTSLocEnUS.dat", onecore_dir);
+                link_to(G.work[i], "MSTTSLocEnUS.dat", path);
+            }
+        }
+    }
+    {
+        const char *voc = !strcmp(v->name, "Aria") ? "device_vocoder_v5_streaming.bin" : "device_vocoder_v6_streaming.bin";
+        char voc_dst[PATH_MAX];
+        snprintf(voc_dst, sizeof voc_dst, "%s/%s", G.work[i], voc);
+        if (access(voc_dst, R_OK) && strcmp(v->name, "Aria") != 0) {
+            snprintf(path, sizeof path, "%s/Jenny/device_vocoder_v6_streaming.bin", data_dir);
+            link_to(G.work[i], voc, path);
+        }
+        if (access(voc_dst, R_OK)) {
+            seterr(err, errlen, "incomplete voice data for %s", v->name);
             return -1;
         }
     }
@@ -347,6 +392,52 @@ void cvn_release_engine(void)
 }
 
 /* ---- public ---- */
+int cvn_voice_has_data(const char *sdk_dir, const char *data_dir, const char *onecore_dir, const char *voice)
+{
+    int i = voice_index(voice);
+    const nv_def *v;
+    const char *voc;
+    char path[PATH_MAX];
+    struct stat st;
+    if (i < 0 || !sdk_dir || !*sdk_dir || !data_dir || !*data_dir) return 0;
+    v = &VOICES[i];
+    snprintf(path, sizeof path, "%s/libMicrosoft.CognitiveServices.Speech.core.dylib", sdk_dir);
+    if (stat(path, &st) || !S_ISREG(st.st_mode) || st.st_size <= 131072) return 0; /* > 128 KB excludes stub_data.sh */
+    snprintf(path, sizeof path, "%s/model.key", data_dir);
+    if (stat(path, &st) || !S_ISREG(st.st_mode) || st.st_size == 0) return 0;
+    snprintf(path, sizeof path, "%s/%s/%s", data_dir, v->name, v->ini);
+    if (access(path, R_OK)) return 0;
+    snprintf(path, sizeof path, "%s/%s/am_v5_encoder.bin", data_dir, v->name);
+    if (access(path, R_OK)) return 0;
+    snprintf(path, sizeof path, "%s/%s/am_v5_decoder.bin", data_dir, v->name);
+    if (access(path, R_OK)) return 0;
+    voc = !strcmp(v->name, "Aria") ? "device_vocoder_v5_streaming.bin" : "device_vocoder_v6_streaming.bin";
+    snprintf(path, sizeof path, "%s/%s/%s", data_dir, v->name, voc);
+    if (access(path, R_OK)) {
+        if (!strcmp(v->name, "Aria")) return 0;
+        snprintf(path, sizeof path, "%s/Jenny/device_vocoder_v6_streaming.bin", data_dir);
+        if (access(path, R_OK)) return 0;
+    }
+    if (!strcmp(v->locale, "en-US")) {
+        if (!onecore_dir || !*onecore_dir) return 0;
+        snprintf(path, sizeof path, "%s/MSTTSLocEnUS.dat", onecore_dir);
+        if (access(path, R_OK)) return 0;
+    } else if (!strcmp(v->locale, "en-GB")) {
+        if (!onecore_dir || !*onecore_dir) return 0;
+        snprintf(path, sizeof path, "%s/en-GB/MSTTSLocEnGB.dat", data_dir);
+        if (access(path, R_OK)) return 0;
+        snprintf(path, sizeof path, "%s/EnGB.Address.dat", onecore_dir);
+        if (access(path, R_OK)) return 0;
+    } else {
+        snprintf(path, sizeof path, "%s/%s/%s", data_dir, v->locale, v->loc_dat);
+        if (access(path, R_OK)) {
+            snprintf(path, sizeof path, "%s/%s/%s", data_dir, v->name, v->loc_dat);
+            if (access(path, R_OK)) return 0;
+        }
+    }
+    return 1;
+}
+
 cvn_voice *cvn_voice_open(const char *sdk_dir, const char *data_dir, const char *onecore_dir, const char *work_dir,
                           const char *voice, char *err, size_t errlen)
 {
@@ -434,7 +525,7 @@ int cvn_voice_speak(cvn_voice *v, const char *utf8, double sapi_rate, double sem
     size_t have = 0;
     int rc = 0, stopped = 0, status = 0;
     if (!v || !utf8 || !fn) return -1;
-    clean = cv_sanitize_alloc(utf8);
+    clean = strncmp(VOICES[v->index].locale, "en-", 3) == 0 ? cv_sanitize_alloc(utf8) : cv_sanitize_unicode_alloc(utf8);
     if (!clean) return -1;
     for (p = clean; *p == ' '; p++) {}
     if (!*p) { /* nothing speakable: no audio, and never any stand-in text */

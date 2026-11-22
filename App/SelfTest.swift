@@ -44,15 +44,28 @@ enum SelfTest {
         : onlyAnna ? annaCases : neuralCases + annaCases + truvoiceCases + sapi4Cases + sapi5Cases + pauseCases
     /// the voices the in-process engine pass covers
     private static var engineVoices: [ClassicVoiceDef] {
-        onlySAPI5 ? [] : onlyTruVoice ? TRUVOICE_VOICES : onlyAnna ? [ANNA_VOICE] : onlyNeural ? NEURAL_VOICES
-            : NEURAL_VOICES + [ANNA_VOICE] + TRUVOICE_VOICES + SAPI4_VOICES
+        let availableNeural = NEURAL_VOICES.filter { ClassicEngine.shared.isVoiceAvailable($0) }
+        return onlySAPI5 ? [] : onlyTruVoice ? TRUVOICE_VOICES : onlyAnna ? [ANNA_VOICE] : onlyNeural ? availableNeural
+            : availableNeural + [ANNA_VOICE] + TRUVOICE_VOICES + SAPI4_VOICES
     }
 
-    /// The neural voices (Microsoft's embedded Speech SDK, cvn_bridge): every voice once with the ~5 s sentence (rtf=),
+    private static func sampleText(for v: ClassicVoiceDef) -> String {
+        switch String(v.language.prefix(2)) {
+        case "ja": return "こんにちは。今日はとてもいい天気ですね。これから音声合成のテストを行います。"
+        case "zh": return "你好，今天天气非常好，我们现在开始进行语音合成测试。"
+        case "ko": return "안녕하세요. 오늘 날씨가 정말 좋네요. 지금부터 음성 합성 테스트를 시작합니다."
+        case "de": return "Hallo, heute ist ein wunderschöner Tag, und wir testen jetzt die Sprachausgabe."
+        case "fr": return "Bonjour, il fait très beau aujourd'hui et nous testons la synthèse vocale."
+        case "es": return "Hola, hoy hace muy buen tiempo y estamos probando la síntesis de voz."
+        case "pt": return "Olá, hoje o tempo está muito bom e estamos testando a síntese de voz."
+        default: return "The quick brown fox jumps over the lazy dog, and then it runs away into the forest."
+        }
+    }
+
+    /// The neural voices (Microsoft's embedded Speech SDK, cvn_bridge): every staged voice once with the ~5 s sentence (rtf=),
     /// then numbers, hostile text, SSML, the rate range ends, the digit trim and cancel.
-    private static let neuralCases: [Case] = NEURAL_VOICES.map { v in
-        Case(name: "nv_" + v.neuralVoice.lowercased(), voiceSlug: v.slug, rate: nil,
-             text: "The quick brown fox jumps over the lazy dog, and then it runs away into the forest.")
+    private static let neuralCases: [Case] = NEURAL_VOICES.filter { ClassicEngine.shared.isVoiceAvailable($0) }.map { v in
+        Case(name: "nv_" + v.neuralVoice.lowercased(), voiceSlug: v.slug, rate: nil, text: sampleText(for: v))
     } + [
         Case(name: "nv_jenny_numbers", voiceSlug: "neural_jenny", rate: nil,
              text: "The meeting moved from March 3rd, 2021 to 12/25/2024 at 10:30 am, and it costs $56.78."),
@@ -271,8 +284,8 @@ enum SelfTest {
     }
 
     private static func engineCheck() {
-        let text = "The quick brown fox jumps over the lazy dog, and then it runs away into the forest."
         for v in engineVoices {
+            let text = sampleText(for: v)
             // cold: opening the engine + the first utterance; firstAudio = the call to its first PCM
             ClassicEngine.shared.releaseIdle()
             let mem0 = footprintMB()
