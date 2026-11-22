@@ -101,6 +101,8 @@ static const cv_word CV_WORDS[] = {
     {0x23CE, " return "},
     {0x2713, " check mark "},
     {0x2714, " check mark "},
+    {0xF8FF, " Apple "}, /* Apple's logo (private use): "Pay with  Pay" is "Pay with Apple Pay"; VoiceOver
+                          * names it only when it speaks the character alone, running text reaches us raw */
 };
 
 /* Characters the engine's normalizer already verbalizes (Latin-1 / Windows-1252 symbols): passed as-is. */

@@ -350,6 +350,11 @@ func runRender(_ outDir: String) {
             _ = ClassicEngine.shared.speak(text: "5", voice: v, sapiRate: rate, semitones: 0) { direct.append(contentsOf: $0); return true }
             let d = renderNew(#"<speak><prosody rate="100%">5</prosody></speak>"#, v, rate: rate)
             check(d.pcm == direct, "\(v.slug) \(label): single digit identical to the direct engine call (\(direct.count * 1000 / 22050) ms)")
+            // U+F8FF, Apple's logo, in running text: every engine says "Apple", exactly as if the word were written
+            let logo = renderNew("<speak>Pay with \u{F8FF} Pay.</speak>", v, rate: rate)
+            let word = renderNew("<speak>Pay with Apple Pay.</speak>", v, rate: rate)
+            check(logo.rc == 0 && !word.pcm.isEmpty && logo.pcm == word.pcm,
+                  "\(v.slug) \(label): \"Pay with <Apple logo> Pay\" identical to \"Pay with Apple Pay\" (\(word.pcm.count * 1000 / 22050) ms)")
         }
     }
 }

@@ -216,6 +216,28 @@ int main(int argc, char **argv)
                 check(prc == 0 && pn > 22050, path);
             }
         }
+        {
+            /* U+F8FF, Apple's logo, is spoken as the word "Apple" (VoiceOver names it only when it speaks the
+             * character alone): "Pay with <logo> Pay" -> "Pay with Apple Pay", the words kept apart */
+            static const struct { const char *in, *want; } logo[] = {
+                {"Pay with \xEF\xA3\xBF Pay", "Pay with Apple Pay"},
+                {"Pay with  \xEF\xA3\xBFPay.", "Pay with Apple Pay."},
+                {"\xEF\xA3\xBFWatch", "Apple Watch"},
+                {"\xEF\xA3\xBF", "Apple"},
+                {"(\xEF\xA3\xBF)", "( Apple )"},
+            };
+            size_t with = 0, words = 0;
+            for (i = 0; i < sizeof logo / sizeof *logo; i++) {
+                char *c = cv_sanitize_alloc(logo[i].in);
+                snprintf(path, sizeof path, "Apple logo: \"%s\" -> [%s]", logo[i].want, c ? c : "(null)");
+                check(c && !strcmp(c, logo[i].want), path);
+                cv_free(c);
+            }
+            say(dir, "Sam", "none", 0, 0, 0, "Pay with \xEF\xA3\xBF Pay.", NULL, 1, &with);
+            say(dir, "Sam", "none", 0, 0, 0, "Pay with Apple Pay.", NULL, 1, &words);
+            snprintf(path, sizeof path, "Apple logo spoken like the word: %zu samples, \"Apple\" %zu", with, words);
+            check(with > 22050 && with == words, path);
+        }
         printf(failures ? "%d FAILURES\n" : "all passed\n", failures);
         return failures != 0;
     }
