@@ -56,6 +56,15 @@ project's patches applied (Engine/patches/). The upstream licence files are kept
    Pinned:   ecc002fdfd45812d49126d07e56816a4061c367d
    Licence:  NONE. The upstream project has no licence file, and none is added here. Unmodified.
 
+6. Sparkle (the Mac app's updates), a Swift package fetched at build time, not vendored; the Mac app embeds
+   Sparkle.framework. Not in the iPhone and iPad app.
+   Upstream: https://github.com/sparkle-project/Sparkle
+   Pinned:   2.10.1 (exact version, project.yml)
+   Licence:  MIT, Copyright (c) 2006-2013 Andy Matuschak, (c) 2009-2013 Elgato Systems GmbH, (c) 2011-2014 Kornel
+             Lesinski, (c) 2015-2017 Mayur Pawashe, (c) 2014 C.W. Betts, (c) 2014 Petroules Corporation, (c) 2014 Big
+             Nerd Ranch, with the external components its LICENSE lists (the package's LICENSE file)
+   Unmodified; tools/sparkle-sign.sh only re-signs its helpers.
+
 Referenced, not copied: the TruVoice speaker names follow https://github.com/devinprater/iTruVoice (MIT).
 
 Build-time only, not vendored: XcodeGen (to generate the Xcode project) and, for one optional Mac test of the SAPI 4

@@ -42,7 +42,7 @@ Sideloadly (quick one time install):
 
 With a free Apple ID the app stops working after 7 days and has to be reinstalled. A paid Apple Developer account keeps it running for a year.
 
-On the Mac, the download is signed and notarized. Unzip it, put Sapple in Applications and open it once so macOS picks up the voices. Leave it there, since macOS finds the voices through the app. The Mac app needs an Apple Silicon Mac; it does not run on an Intel Mac.
+On the Mac, the download is signed and notarized. Unzip it, put Sapple in Applications and open it once so macOS picks up the voices. Leave it there, since macOS finds the voices through the app. The Mac app needs an Apple Silicon Mac; it does not run on an Intel Mac. From the first version with automatic updates on, the Mac app updates itself: it checks while it is open and, through a small Sapple Updates login item, while it is closed, and it always asks before installing. Both checks can be turned off in the app's Updates section.
 
 ## Picking the voices
 
@@ -99,7 +99,7 @@ make release VERSION=1.1 NOTES="What's new in this version."            # the re
 
 It needs every voice data folder, and the server and notarization settings in `tools/release.local` (the list is at the top of `tools/release.sh`). It sets the version in `project.yml` and the next build number, builds both apps, reads the version back out of the built apps, adds the new entry to the top of `source.json`, updates the page, backs both up on the server before replacing them, and checks the live source and the IPA download afterwards. It refuses a version that is already in the source. AltStore and SideStore show the update the next time they refresh the source. Commit `project.yml` and `README.md` afterwards.
 
-Mac updates through Sparkle aren't set up yet; Mac users download the new zip from the page.
+The Mac app updates itself with [Sparkle](https://sparkle-project.org) 2: the release also signs the Mac zip with Sapple's own Sparkle EdDSA key (`SPARKLE_KEY_FILE` in `tools/release.local`; its public half is `SUPublicEDKey` in `App/Info-macOS.plist`) and puts it on top of `appcast.xml` next to the source. The app checks when it is open (at launch when due, then daily, and from "Check for Updates..." in the app menu); while it is closed, the Sapple Updates login item inside it checks and posts a notification, which opens the app's update window. Nothing is installed without asking. The app itself has no network access: Sparkle's downloader service fetches the appcast and the update. Both checks can be turned off in the app's Updates section. Builds with `CV_SPARKLE_TEST` read a local test feed instead and are refused by the release.
 
 ## Project layout
 
