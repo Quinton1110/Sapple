@@ -150,6 +150,20 @@ func runParse() {
     s = SSML.segments(#"<speak><s><prosody pitch="-15%">5</prosody></s><s>0</s></speak>"#)
     check(texts(s) == ["5", "0"], "digits at different pitches are not merged \(texts(s))")
 
+    // Hostile values (2026-11-21): a break time that is not a finite number used to trap in Int() and take the
+    // extension down; a numeric NUL entity cut the text short at the C boundary; a NaN pitch became -12 semitones.
+    for t in ["infs", "nan", "1e30ms", "99999999999999999999", "-5s"] {
+        s = SSML.segments("<speak>a<break time=\"\(t)\"/>b</speak>")
+        check(texts(s) == ["a", "b"] && gaps(s).allSatisfy { $0 >= 0 && $0 <= 2000 }, "break time=\(t) does not trap \(gaps(s))")
+    }
+    s = SSML.segments("<speak>a &#0; b &#x7; c</speak>")
+    check(texts(s).count == 1 && !texts(s)[0].unicodeScalars.contains { $0.value < 0x20 } && texts(s)[0].hasSuffix("c"),
+          "control-character entities are dropped, the rest is kept: \(texts(s))")
+    for p in ["nanst", "inf%", "-inf%"] {
+        s = SSML.segments("<speak><prosody pitch=\"\(p)\">a</prosody></speak>")
+        check(pitches(s) == [0], "pitch=\(p) is ignored \(pitches(s))")
+    }
+
     // Parity: without <s>/<p>, the new parser gives exactly the old text and silence.
     let legacyInputs = fixtures.map(\.ssml).filter { !$0.contains("<s>") && !$0.contains("<p>") } + [
         #"<speak><break time="1s"/>Hi</speak>"#, #"<speak>One <break time="700ms"/> <break time="300ms"/> two</speak>"#,

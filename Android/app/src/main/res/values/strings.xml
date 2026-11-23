@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Sapple</string>
+    <string name="status_none">No voices yet. Import them from a Sapple download to start.</string>
+    <plurals name="status_count">
+        <item quantity="one">%d voice ready.</item>
+        <item quantity="other">%d voices ready.</item>
+    </plurals>
+    <string name="import_voices">Import voices from a Sapple download</string>
+    <string name="import_help">Pick the Sapple file for iPhone (.ipa) or Mac (.zip) from quintonwilliams.me/sapple. Sapple copies the voice data out of it onto this phone. The file itself is not changed.</string>
+    <string name="importing">Importing voices. This can take a minute.</string>
+    <string name="import_done">Done. %d voices ready.</string>
+    <string name="import_none">No Sapple voice data found in that file.</string>
+    <string name="import_failed">Import failed: %s</string>
+    <string name="voice_now">Voice: %s</string>
+    <string name="voice_none">none</string>
+    <string name="choose_voice">Choose a voice</string>
+    <string name="preview_hint">Text to preview</string>
+    <string name="preview">Preview voice</string>
+    <string name="preview_default">Hello, this is %s.</string>
+    <string name="preview_failed">This voice could not speak. %s</string>
+    <string name="stop">Stop preview</string>
+    <string name="open_tts_settings">Open text-to-speech settings</string>
+    <string name="remove_voices">Remove all voices</string>
+    <string name="remove_confirm">Remove every imported voice from this phone? You can import them again later.</string>
+    <string name="copy_diagnostics">Copy diagnostics</string>
+    <string name="diagnostics_copied">Diagnostics copied. Paste them into your bug report. They list the app and Android versions and which voices are on this phone, nothing you had spoken.</string>
+</resources>

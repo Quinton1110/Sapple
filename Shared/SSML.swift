@@ -271,7 +271,10 @@ enum SSML {
                 out += ns.substring(with: NSRange(location: last, length: m.range.location - last))
                 let hex = ns.substring(with: m.range(at: 1)) != ""
                 let digits = ns.substring(with: m.range(at: 2))
-                if let v = UInt32(digits, radix: hex ? 16 : 10), let u = Unicode.Scalar(v) {
+                // Control characters (&#0; above all) are dropped: a NUL would end the C string the engines read, so
+                // everything after it went unspoken. Tab, line feed and carriage return are kept as whitespace.
+                if let v = UInt32(digits, radix: hex ? 16 : 10), let u = Unicode.Scalar(v),
+                   v >= 0x20 || v == 0x09 || v == 0x0A || v == 0x0D, v != 0x7F {
                     out.unicodeScalars.append(u)
                 }
                 last = m.range.location + m.range.length
@@ -318,7 +321,8 @@ enum SSML {
 
     /// The time attribute in milliseconds (capped at 2 s); nil when absent or unreadable.
     static func breakTimeMs(_ attrs: Substring) -> Int? {
-        func cap(_ ms: Double) -> Int { max(0, min(Int(ms.rounded()), 2000)) }
+        // Clamp before converting: Int() traps on NaN, infinity or anything past Int.max ("nan", "inf", "1e30ms").
+        func cap(_ ms: Double) -> Int { ms.isFinite ? Int(min(max(ms, 0), 2000).rounded()) : 0 }
         guard let t = attribute("time", in: String(attrs))?.lowercased().trimmingCharacters(in: .whitespaces)
         else { return nil }
         if t.hasSuffix("ms"), let n = Double(t.dropLast(2)) { return cap(n) }
@@ -382,8 +386,9 @@ enum SSML {
         }
         let signed = raw.hasPrefix("+") || raw.hasPrefix("-")
         // semitones are always a change from the enclosing pitch
-        if raw.hasSuffix("st"), let n = Double(raw.dropLast(2)) { return (min(12, max(-12, n)), true) }
-        if raw.hasSuffix("%"), let n = Double(raw.dropLast()) {
+        // Not finite ("nanst", "inf%") is unreadable, like any other junk value.
+        if raw.hasSuffix("st"), let n = Double(raw.dropLast(2)), n.isFinite { return (min(12, max(-12, n)), true) }
+        if raw.hasSuffix("%"), let n = Double(raw.dropLast()), n.isFinite {
             if signed { return (st(1.0 + n / 100.0), true) }
             return (n <= 0 ? 0 : st(n / 100.0), false)
         }

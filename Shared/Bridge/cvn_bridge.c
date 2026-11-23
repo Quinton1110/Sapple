@@ -148,7 +148,12 @@ static int load_sdk(const char *sdk_dir, char *err, size_t errlen)
     char path[PATH_MAX];
     void *dl;
     if (G.dl) return 0;
+#ifdef __ANDROID__
+    /* Android: the SDK's .so files sit in the app's native library folder (extracted, so they have a real path). */
+    snprintf(path, sizeof path, "%s/libMicrosoft.CognitiveServices.Speech.core.so", sdk_dir ? sdk_dir : "");
+#else
     snprintf(path, sizeof path, "%s/libMicrosoft.CognitiveServices.Speech.core.dylib", sdk_dir ? sdk_dir : "");
+#endif
     dl = dlopen(path, RTLD_NOW | RTLD_GLOBAL); /* the extension dylibs find the core's symbols through it */
     if (!dl) {
         seterr(err, errlen, "cannot load the speech engine: %s", dlerror());
